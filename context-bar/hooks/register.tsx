@@ -18,7 +18,7 @@ import {
 import { EMIT_SPEC, EMIT_TOOL, normalizeEmit, outcomeText } from './progress/events'
 import { applyLegacyPlan, currentPlan, hasOpenEmitRun, migrateSteps } from './progress/legacy'
 import { type Action, emptyState, isTerminal, nextDue, reduce } from './progress/reducer'
-import { diagnosticsText, primaryRun, runView } from './progress/view'
+import { backgroundCount, diagnosticsText, runView, shownRun } from './progress/view'
 
 const snapshot = atom({ plugin: 'context-bar', key: 'snapshot' } as const, null)
 // Why the last refresh produced no full breakdown; shown while there is no snapshot.
@@ -36,6 +36,11 @@ const FREE_COLOR = 'inactive'
 const TICK_COLOR = 'warning'
 // Free space as a block background; a background cannot be dimmed, so a lighter key stands in.
 const FREE_BG = 'subtle'
+// How much of the row the desktop's divider spans: a desktop draws ─ wider than
+// a cell, so a full row of them overflows into an ellipsis. Centred, the
+// shorter rule reads as an inset separator.
+const DESKTOP_RULE_SHARE = 0.85
+
 // Delay before measuring the conversation a /clear started.
 const CLEAR_REFRESH_MS = 500
 
@@ -483,14 +488,29 @@ export const register: Register = on => {
     const mascotSvg = e.surface === 'terminal' ? undefined : Svg
     lastSurface = e.surface
 
-    const run = primaryRun(await read($, progress))
+    const state = await read($, progress)
+    const run = shownRun(state)
     const view = run !== null ? runView(run, await now($)) : null
-    const blocks = progressRows(view, { Box, Text, Svg: mascotSvg } as never)
-    // Progress sits above the context bar, one blank row between them.
+    const blocks = progressRows(view, { Box, Text, Svg: mascotSvg } as never, {
+      background: backgroundCount(state, run),
+      columns: e.props.bodyColumns,
+    })
+    // Progress sits above the context bar, a low-contrast text rule between them,
+    // cut to one line. The terminal's spans the row, one ─ per cell; the
+    // desktop's is shorter and centred (DESKTOP_RULE_SHARE). An Svg line drew
+    // nothing there: without a width of its own it is laid out zero wide.
+    const ruleCells = Math.max(10, e.props.bodyColumns - 4)
+    const isTerminal = e.surface === 'terminal'
+    const ruleWidth = isTerminal ? ruleCells : Math.floor(ruleCells * DESKTOP_RULE_SHARE)
     const progressBox =
       blocks.length > 0 ? (
-        <Box key="progress" flexDirection="column" rowGap={1} marginBottom={1}>
+        <Box key="progress" flexDirection="column">
           {blocks}
+          <Box key="progress-divider" height={1} flexDirection="row" justifyContent={isTerminal ? 'flex-start' : 'center'}>
+            <Text wrap="truncate-end" color="inactive" dimColor>
+              {'─'.repeat(ruleWidth)}
+            </Text>
+          </Box>
         </Box>
       ) : null
 
