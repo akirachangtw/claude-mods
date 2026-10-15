@@ -11,6 +11,7 @@ import type {
 } from '../../types'
 import { REGISTRY, normalize } from './manifests'
 import { advanceRgr } from './rgr'
+import { PRIMARY_HOLD_MS, settlePrimary } from './view'
 
 // The progress reducer: pure, one action in, the next state and what became of
 // the action out. Three layers, each with its own sources:
@@ -59,6 +60,9 @@ export type Outcome = {
 }
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
+// Ended runs that leave the band on their own: done, or called off. A failed
+// run stays until it is dismissed or replaced.
+const fades = (r: ProgressRunState) => r.base === 'completed' || r.base === 'cancelled'
 export const isTerminal = (r: ProgressRunState) => TERMINAL.has(r.base)
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
@@ -177,7 +181,11 @@ const wake = (r: ProgressRunState) => {
 }
 
 const finish = (r: ProgressRunState, at: number) => {
+  const before = r.committed.percent
   r.committed.percent = committedPercent(r)
+  // Whatever moved it (a checkpoint, a child unit, a stage left behind), a
+  // rise is a commit: the band ranks runs by the newest one.
+  if (r.committed.percent > before) r.liveness.lastCommittedAt = at
   refreshBuffer(r)
   settle(r, at)
 }
@@ -484,7 +492,11 @@ const onEvent = (s: ProgressState, ev: ProgressEvent, agentId?: string): { state
   }
 
   r.lastSequence = ev.sequence
-  if (ev.message !== undefined && ev.type !== 'heartbeat') r.liveness.currentMessage = ev.message.slice(0, 120)
+  // A wait's or a pause's words are its reason (pauseReason), not the run's
+  // message, so they leave with the wait instead of outliving it.
+  if (ev.message !== undefined && ev.type !== 'heartbeat' && ev.type !== 'run.waiting' && ev.type !== 'run.paused') {
+    r.liveness.currentMessage = ev.message.slice(0, 120)
+  }
   touch(r, at)
   finish(r, at)
   s.counts.accepted += 1
@@ -502,7 +514,19 @@ const onEvent = (s: ProgressState, ev: ProgressEvent, agentId?: string): { state
 
 // ---- the reducer -------------------------------------------------------------
 
+// Every action also settles which run the band shows.
 export const reduce = (
+  prev: ProgressState,
+  action: Action,
+  agentId?: string,
+): { state: ProgressState; outcome: Outcome } => {
+  const res = reduceRuns(prev, action, agentId)
+  const at = action.kind === 'event' ? action.event.timestamp : action.at
+  const state = settlePrimary(res.state, at)
+  return state === res.state ? res : { state, outcome: res.outcome }
+}
+
+const reduceRuns = (
   prev: ProgressState,
   action: Action,
   agentId?: string,
@@ -580,7 +604,7 @@ export const reduce = (
       for (const id of s.order) {
         const r = s.runs[id]
         if (r === undefined) continue
-        if (r.base === 'completed') r.hidden = true
+        if (fades(r)) r.hidden = true
         else if (r.foreground && r.base === 'waiting-user') {
           r.base = 'running'
           r.liveness.waitingSince = undefined
@@ -596,7 +620,7 @@ export const reduce = (
       for (const id of s.order) {
         const r = s.runs[id]
         if (r === undefined || r.hidden) continue
-        if (r.base === 'completed' && r.endedAt !== undefined && action.at - r.endedAt >= FADE_MS) r.hidden = true
+        if (fades(r) && r.endedAt !== undefined && action.at - r.endedAt >= FADE_MS) r.hidden = true
         else if (
           r.base === 'running' &&
           !r.stale &&
@@ -639,10 +663,12 @@ export const reduce = (
 export const nextDue = (s: ProgressState): number | null => {
   let due: number | null = null
   const consider = (t: number) => (due = due === null ? t : Math.min(due, t))
+  // A run held back from the band gets its turn once the hold is over.
+  if (s.primary?.held !== undefined) consider(s.primary.since + PRIMARY_HOLD_MS)
   for (const id of s.order) {
     const r = s.runs[id]
     if (r === undefined || r.hidden) continue
-    if (r.base === 'completed' && r.endedAt !== undefined) consider(r.endedAt + FADE_MS)
+    if (fades(r) && r.endedAt !== undefined) consider(r.endedAt + FADE_MS)
     else if (r.base === 'running' && !r.stale && Object.keys(r.buffer.activeActivities).length === 0) {
       consider(r.liveness.lastEventAt + STALE_MS)
     }
