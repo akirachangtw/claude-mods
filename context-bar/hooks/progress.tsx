@@ -1,4 +1,6 @@
-import type { StepProgress } from '../types'
+import type { LivenessStatus, StepProgress } from '../types'
+import { EMIT_TOOL } from './progress/events'
+import { formatElapsed, type RunView } from './progress/view'
 
 // Pure helpers for the progress rows; everything that calls $, and the state atoms
 // the engine scans for, live in register.tsx.
@@ -34,8 +36,9 @@ export const PROMPT_SECTION = {
     "skill or a ticket it lists that document's sections (a ticket's Action Items, then its " +
     'Acceptance Criteria); call the tool with done = sections finished so far at the start of ' +
     'every next section, one call per section, never batched, and a last call when all are done. ' +
-    'For other multi-step work (3+ steps) give total and label on the first call. Do not mention ' +
-    'these calls.',
+    'For other multi-step work (3+ steps) give total and label on the first call. A workflow with ' +
+    `stages and checkpoints reports through ${EMIT_TOOL} instead. Tool calls never count as ` +
+    'progress. Do not mention these calls.',
   scope: 'session',
 } as const
 
@@ -71,10 +74,6 @@ export const applyReport = (prev: StepProgress | null, input: Record<string, unk
   return { source: 'report', label, sections: [], step, mech: 0, reported: d, done: d, total: t, paused: false, calls: isSameStep ? prev.calls : 0 }
 }
 
-// How far into the current step the bar creeps after `calls` tool calls: quick at
-// first, never reaching the next step (only a report or a ticked box does that).
-export const creep = (calls: number) => 0.85 * (1 - Math.pow(0.7, calls))
-
 const FENCE = /^\s*(```|~~~)/
 
 const headings = (md: string) => {
@@ -103,7 +102,7 @@ const CHECKBOX = /^\s*[-*]\s+\[([ xX])\]\s*(.*)$/
 // A ticket's sections: each sub-heading under Action Items (each checkbox there when it
 // has none), then Acceptance Criteria as one. A section is finished once it has owed
 // boxes and all are ticked; a struck-through or N/A box is not owed.
-export const ticketSections = (md: string): { names: string[]; finished: number } => {
+export const ticketSectionStates = (md: string): { names: string[]; finished: boolean[] } => {
   type Sec = { name: string; owed: number; ticked: number }
   const ai: Sec[] = []
   let ac: Sec | null = null
@@ -140,7 +139,12 @@ export const ticketSections = (md: string): { names: string[]; finished: number 
     if (isChecked) cur.ticked += 1
   }
   const secs = [...ai, ...(ac !== null && ac.owed > 0 ? [ac] : [])]
-  return { names: secs.map(x => x.name), finished: secs.filter(x => x.owed > 0 && x.ticked === x.owed).length }
+  return { names: secs.map(x => x.name), finished: secs.map(x => x.owed > 0 && x.ticked === x.owed) }
+}
+
+export const ticketSections = (md: string): { names: string[]; finished: number } => {
+  const { names, finished } = ticketSectionStates(md)
+  return { names, finished: finished.filter(Boolean).length }
 }
 
 // The ticket's file in a Pending/ listing: `<id>.md` or `<id>_<slug>.md`.
@@ -148,95 +152,146 @@ export const pendingName = (names: readonly { name: string; kind: string }[], id
   names.find(f => f.kind === 'file' && (f.name === `${id}.md` || (f.name.startsWith(`${id}_`) && f.name.endsWith('.md'))))
     ?.name ?? null
 
+
 type El = (props: Record<string, unknown>, ...children: unknown[]) => unknown
 type Els = { Box: El; Text: El; Svg?: El }
-type RunState = 'running' | 'paused' | 'done'
 
-const CLAWD = '#D97757'
+const FUR = '#B8865B'
 const EYE = '#2B1D16'
 
-// Clawd, Claude Code's mascot, in 11x8 pixels: walking while running, blinking while
-// paused, hopping when done. SMIL runs in the surface; the hook never redraws for it.
-export const clawdSvg = (state: RunState) => {
+type Pose = 'run' | 'step' | 'sit' | 'hop' | 'droop' | 'sleep'
+
+const POSE: Record<LivenessStatus, Pose> = {
+  queued: 'sit',
+  running: 'run',
+  'waiting-tool': 'step',
+  'waiting-user': 'sit',
+  paused: 'sit',
+  stale: 'sleep',
+  completed: 'hop',
+  failed: 'droop',
+  cancelled: 'sit',
+  orphaned: 'sleep',
+}
+
+// An original 12x9 pixel cat, side view: ears, head, body, raised tail. Its pose
+// says the run's liveness, never how far it has got. SMIL runs in the surface;
+// the hook never redraws for a frame.
+export const catSvg = (status: LivenessStatus) => {
+  const pose = POSE[status]
+  const anim = (attr: string, values: string, dur: string, extra = '') =>
+    `<animate attributeName="${attr}" values="${values}" dur="${dur}" repeatCount="indefinite"${extra}/>`
   const bob =
-    state === 'running'
-      ? '<animateTransform attributeName="transform" type="translate" values="0 0;0 -0.6;0 0" dur="0.36s" repeatCount="indefinite"/>'
-      : state === 'done'
-        ? '<animateTransform attributeName="transform" type="translate" values="0 0;0 -1.6;0 0;0 0" keyTimes="0;0.3;0.6;1" dur="0.9s" repeatCount="indefinite"/>'
+    pose === 'run'
+      ? '<animateTransform attributeName="transform" type="translate" values="0 0;0 -0.5;0 0" dur="0.36s" repeatCount="indefinite"/>'
+      : pose === 'hop'
+        ? '<animateTransform attributeName="transform" type="translate" values="0 0;0 -1.6;0 0" keyTimes="0;0.4;1" dur="0.6s" repeatCount="1" fill="freeze"/>'
         : ''
-  const legs = (phase: 'a' | 'b') =>
-    state === 'running'
-      ? `<animate attributeName="height" values="${phase === 'a' ? '2;1;2' : '1;2;1'}" dur="0.36s" repeatCount="indefinite"/>`
-      : ''
-  const blink =
-    state === 'paused'
-      ? '<animate attributeName="height" values="1;1;0.15;1" keyTimes="0;0.9;0.95;1" dur="3s" repeatCount="indefinite"/>'
-      : ''
-  const leg = (x: number, phase: 'a' | 'b') =>
-    `<rect x="${x}" y="6" width="1" height="2" fill="${CLAWD}">${legs(phase)}</rect>`
+  const leg = (x: number, phase: 'a' | 'b') => {
+    const move = pose === 'run' ? anim('height', phase === 'a' ? '2;1;2' : '1;2;1', '0.36s') : pose === 'step' ? anim('height', phase === 'a' ? '2;1.4;2' : '1.4;2;1.4', '0.9s') : ''
+    const h = pose === 'sit' || pose === 'sleep' || pose === 'droop' ? 1 : 2
+    return `<rect x="${x}" y="7" width="1" height="${h}" fill="${FUR}">${move}</rect>`
+  }
+  const tailWag = pose === 'run' ? anim('y', '1;2;1', '0.36s') : ''
+  const earY = pose === 'droop' ? 2 : 0
+  const eyeH = pose === 'sleep' ? 0.25 : 1
+  const blink = pose === 'sit' ? anim('height', '1;1;0.15;1', '3s', ' keyTimes="0;0.9;0.95;1"') : ''
+  const zz = pose === 'sleep' ? `<text x="7" y="2" font-size="3" fill="${FUR}">z</text>` : ''
   return (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1 11 9" width="26" height="21" shape-rendering="crispEdges">' +
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1 13 10" width="26" height="20" shape-rendering="crispEdges">' +
     `<g>${bob}` +
-    `<rect x="2" y="2" width="7" height="4" fill="${CLAWD}"/>` +
-    `<rect x="0" y="3" width="2" height="2" fill="${CLAWD}"/>` +
-    `<rect x="9" y="3" width="2" height="2" fill="${CLAWD}"/>` +
-    `<rect x="3" y="3" width="1" height="1" fill="${EYE}">${blink}</rect>` +
-    `<rect x="7" y="3" width="1" height="1" fill="${EYE}">${blink}</rect>` +
-    leg(2, 'a') + leg(4, 'b') + leg(6, 'a') + leg(8, 'b') +
+    `<rect x="1" y="${earY}" width="1" height="1" fill="${FUR}"/>` +
+    `<rect x="4" y="${earY}" width="1" height="1" fill="${FUR}"/>` +
+    `<rect x="1" y="1" width="4" height="3" fill="${FUR}"/>` +
+    `<rect x="3" y="2" width="1" height="${eyeH}" fill="${EYE}">${blink}</rect>` +
+    `<rect x="2" y="4" width="9" height="3" fill="${FUR}"/>` +
+    `<rect x="11" y="1" width="1" height="4" fill="${FUR}">${tailWag}</rect>` +
+    leg(2, 'a') + leg(4, 'b') + leg(8, 'a') + leg(10, 'b') +
+    zz +
     '</g></svg>'
   )
 }
 
-// One progress block: a title line (state, label, current step; count and percent on
-// the right) over a full-width track whose fill carries the mascot at its head.
-const block = (
-  { Box, Text, Svg }: Els,
-  key: string,
-  label: string,
-  detail: string | null,
-  done: number,
-  total: number,
-  fill: number,
-  state: RunState,
-) => {
-  const mark = state === 'done' ? '✓' : state === 'paused' ? '⏸' : '▶'
-  const color = state === 'done' ? 'success' : state === 'paused' ? 'inactive' : 'claude'
-  const isPaused = state === 'paused'
-  const pct = Math.round((done / total) * 100)
+// The terminal's cat: a glyph per pose, stable from one draw to the next.
+const CAT_GLYPH: Record<Pose, string> = {
+  run: '=^.^=',
+  step: '=^.^=',
+  sit: '=^-^=',
+  hop: '=^o^=',
+  droop: '=;.;=',
+  sleep: '=-.-=',
+}
+
+const MARK: Record<LivenessStatus, [string, string]> = {
+  queued: ['·', 'inactive'],
+  running: ['▶', 'claude'],
+  'waiting-tool': ['▶', 'claude'],
+  'waiting-user': ['⏸', 'inactive'],
+  paused: ['⏸', 'inactive'],
+  stale: ['◌', 'inactive'],
+  completed: ['✓', 'success'],
+  failed: ['✗', 'error'],
+  cancelled: ['■', 'inactive'],
+  orphaned: ['?', 'inactive'],
+}
+
+const DIM = new Set<LivenessStatus>(['waiting-user', 'paused', 'stale', 'cancelled', 'orphaned'])
+
+// One progress block: a title line (status, label, stage; count and committed
+// percent on the right), a track whose solid fill is committed and whose lighter
+// extension is the buffer, the cat at the committed end, and a liveness line.
+const block = ({ Box, Text, Svg }: Els, key: string, v: RunView) => {
+  const [mark, color] = v.warning && v.status === 'completed' ? ['!', 'warning'] : MARK[v.status]
+  const isDim = DIM.has(v.status)
   const mascot =
     Svg !== undefined ? (
-      <Svg source={clawdSvg(state)} alt={`Clawd ${state}`} width={26} height={21} isInteractive />
+      <Svg source={catSvg(v.status)} alt={`cat ${v.status}`} width={26} height={20} isInteractive />
     ) : (
-      <Text color="claude">{state === 'done' ? '▝▛▜▘' : '▐▛▜▌'}</Text>
+      <Text color="claude">{CAT_GLYPH[POSE[v.status]]}</Text>
     )
+  const committed = Math.max(0, Math.min(100, v.committed))
+  const buffer = Math.max(committed, Math.min(100, v.buffer))
+  const live =
+    v.error !== null
+      ? v.error
+      : [
+          v.rgr,
+          v.activity !== null ? `⧗ ${v.activity}` : null,
+          v.status === 'stale' ? 'no activity' : v.status === 'waiting-user' ? 'waiting for you' : null,
+          formatElapsed(v.elapsedMs),
+        ]
+          .filter(x => x !== null)
+          .join(' · ')
   return (
     <Box key={key} flexDirection="column">
       <Box key={`${key}-head`} flexDirection="row" columnGap={2}>
         <Box key={`${key}-title`} width={0} flexGrow={1}>
-          <Text wrap="truncate-end" dimColor={isPaused}>
+          <Text wrap="truncate-end" dimColor={isDim}>
             <Text color={color}>{`${mark} `}</Text>
-            <Text bold>{label}</Text>
-            {detail !== null ? <Text dimColor>{`   ${detail}`}</Text> : null}
+            <Text bold>{v.label}</Text>
+            {v.detail !== null && v.status !== 'completed' ? <Text dimColor>{`   ${v.detail}`}</Text> : null}
           </Text>
         </Box>
-        <Text dimColor={isPaused}>
-          <Text bold>{`${done}/${total}`}</Text>
-          <Text dimColor>{`  ${pct}%`}</Text>
+        <Text dimColor={isDim}>
+          <Text bold>{`${v.done}/${v.total}`}</Text>
+          <Text dimColor>{`  ${v.percent}%`}</Text>
         </Text>
       </Box>
       <Box key={`${key}-track`} flexDirection="row" alignItems="center" height={1}>
-        {fill > 0 ? <Box width={0} flexGrow={fill} height={1} backgroundColor={color} /> : null}
+        {committed > 0 ? <Box key={`${key}-committed`} width={0} flexGrow={committed} height={1} backgroundColor={color} /> : null}
         {mascot}
-        {fill < total ? <Box width={0} flexGrow={total - fill} height={1} backgroundColor="subtle" /> : null}
+        {buffer > committed ? <Box key={`${key}-buffer`} width={0} flexGrow={buffer - committed} height={1} backgroundColor="inactive" /> : null}
+        {buffer < 100 ? <Box key={`${key}-rest`} width={0} flexGrow={100 - buffer} height={1} backgroundColor="subtle" /> : null}
+      </Box>
+      <Box key={`${key}-live`} flexDirection="row">
+        <Text wrap="truncate-end" dimColor>
+          {live}
+        </Text>
       </Box>
     </Box>
   )
 }
 
-// The progress block drawn above the context bar: none while nothing reports.
-export const progressRows = (s: StepProgress | null, els: Els): unknown[] => {
-  if (s === null) return []
-  const state: RunState = s.done >= s.total ? 'done' : s.paused ? 'paused' : 'running'
-  const fill = state === 'running' ? Math.min(s.total, s.done + creep(s.calls)) : s.done
-  return [block(els, 'progress-steps', s.label, state === 'done' ? null : s.step, s.done, s.total, fill, state)]
-}
+// The progress block drawn above the context bar: none while no run is shown.
+export const progressRows = (v: RunView | null, els: Els): unknown[] =>
+  v === null ? [] : [block(els, 'progress-steps', v)]

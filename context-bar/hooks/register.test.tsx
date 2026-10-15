@@ -267,17 +267,26 @@ test('the progress tool is allowed without a prompt and draws a row', async ($, 
   await ui.unmount()
 })
 
-test('a finished task keeps its ✓ row until the next prompt; an unfinished one pauses', async ($, on) => {
+// Rewritten for progress v2 (spec §Status Host UI): a completed row used to stay
+// until the next prompt; it now fades about two seconds after it completes, and
+// a prompt before then still clears it.
+test('a finished task shows ✓ then fades (or leaves at the next prompt); an unfinished one waits', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
   on('ui.render', engineBand)
   on('prompt.submit', ($: any, e: any) => ({ text: e.text }) as never)
   on('turn.complete', () => ({ text: '' }) as never)
   await $.tool.call({ tool: TOOL, total: 3, done: 1, label: 'rigor' } as never)
   await $.turn.complete({ reason: 'answer', answer: 'done' } as never)
-  let ui = await mountBand($)
+  const ui = await mountBand($)
   expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('⏸')
-  await ui.unmount()
   await $.tool.call({ tool: TOOL, total: 3, done: 3, label: 'rigor' } as never)
-  ui = await mountBand($)
+  expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('✓')
+  await clock.advance(1_000)
+  expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('✓')
+  await clock.advance(1_500)
+  expect(await ui.find({ key: 'progress-steps' })).toBeUndefined()
+  // A prompt clears a completed row sooner.
+  await $.tool.call({ tool: TOOL, total: 2, done: 2, label: 'quick' } as never)
   expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('✓')
   await $.prompt.submit({ text: 'next' } as never)
   expect(await ui.find({ key: 'progress-steps' })).toBeUndefined()
@@ -354,25 +363,35 @@ test('ticket row: activating another ticket drops the old unfinished row', async
   await ui.unmount()
 })
 
-test('between reports the bar creeps within the current step, never past it; the count stays honest', async ($, on) => {
+// Rewritten for progress v2 (spec §三層模型): tool calls used to grow the solid fill
+// toward the next step; they now grow only the lighter buffer segment, and the
+// committed fill and count move on a report alone.
+test('between reports tool calls grow the buffer within the current step, never the committed fill', async ($, on) => {
   on('ui.render', engineBand)
   touchTool(on)
   await $.tool.call({ tool: TOOL, total: 4, done: 1, label: 'plan', step: 'Source' } as never)
   const ui = await mountBand($)
-  const fill = async () => ((await ui.find({ key: 'progress-steps-track' }))?.children[0] as any)?.props?.flexGrow
-  expect(await fill()).toBe(1)
+  const grow = async (part: string) => ((await ui.find({ key: `progress-steps-${part}` })) as any)?.props?.flexGrow ?? 0
+  expect(await grow('committed')).toBe(25)
+  expect(await grow('buffer')).toBe(0)
   for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'mcp__fake__touch' } as never)
-  const crept = await fill()
-  expect(crept).toBeGreaterThan(1.5)
+  expect(await grow('committed')).toBe(25)
+  const crept = await grow('buffer')
+  expect(crept).toBeGreaterThan(5)
   for (let i = 0; i < 30; i++) await $.tool.call({ tool: 'mcp__fake__touch' } as never)
-  expect(await fill()).toBeLessThan(2)
+  expect(await grow('committed')).toBe(25)
+  // The buffer stays short of the next step's start.
+  expect(25 + (await grow('buffer'))).toBeLessThan(50)
   expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('1/4')
+  expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('25%')
   await $.tool.call({ tool: TOOL, total: 4, done: 2, label: 'plan' } as never)
-  expect(await fill()).toBe(2)
+  expect(await grow('committed')).toBe(50)
   await ui.unmount()
 })
 
-test('progress sits above the context header, with the Clawd mascot on desktop and a glyph on the terminal', async ($, on) => {
+// Rewritten for progress v2: Clawd (Claude Code's own character) is replaced by an
+// original pixel cat; the terminal draws a text cat, never an empty Svg.
+test('progress sits above the context header, with the cat mascot on desktop and a text cat on the terminal', async ($, on) => {
   on('session.usage', () => ({ value: USAGE }) as never)
   on('session.measure', () => ({ changed: ['context'] }) as never)
   on('ui.render', engineBand)
@@ -384,18 +403,24 @@ test('progress sits above the context header, with the Clawd mascot on desktop a
   expect(tree.indexOf('"progress"')).toBeLessThan(tree.indexOf('"header"'))
   const svg = (await desk.find({ type: 'Svg' })) as any
   expect(svg?.props?.isInteractive).toBe(true)
-  expect(String(svg?.props?.source)).toContain('animateTransform')
+  expect(String(svg?.props?.alt)).toContain('cat')
+  expect(String(svg?.props?.alt)).not.toContain('Clawd')
+  expect(String(svg?.props?.source)).toContain('animate')
   expect((await desk.find({ key: 'progress-steps' }))?.text).toContain('43%')
   await desk.unmount()
   const term = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   expect(await term.find({ type: 'Svg' })).toBeUndefined()
-  expect((await term.find({ key: 'progress-steps-track' }))?.text).toContain('▐▛▜▌')
+  expect((await term.find({ key: 'progress-steps-track' }))?.text).toContain('=^.^=')
   await term.unmount()
 })
 
-test('a paused row: tool calls leave it paused, a report resumes it, a silent turn drops it', async ($, on) => {
+// Rewritten for progress v2 (spec §暫停、等待與失聯): a silent turn used to drop the
+// row; now it waits for the person, then goes stale (grey) after 120s, never removed.
+test('a waiting row: tool calls leave it waiting, a report resumes it, silence turns it stale but keeps it', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
   on('ui.render', engineBand)
   on('turn.complete', () => ({ text: '' }) as never)
+  on('prompt.submit', ($: any, e: any) => ({ text: e.text }) as never)
   touchTool(on)
   const endTurn = () => $.turn.complete({ reason: 'answer', answer: 'done' } as never)
   await $.tool.call({ tool: TOOL, total: 3, done: 1, label: 'rigor' } as never)
@@ -407,24 +432,32 @@ test('a paused row: tool calls leave it paused, a report resumes it, a silent tu
   await $.tool.call({ tool: TOOL, total: 3, done: 2, label: 'rigor' } as never)
   expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('▶')
   await endTurn()
-  expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('⏸')
   await endTurn()
-  expect(await ui.find({ key: 'progress-steps' })).toBeUndefined()
+  expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('⏸')
+  await $.prompt.submit({ text: 'go on' } as never)
+  expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('▶')
+  await clock.advance(121_000)
+  const row = (await ui.find({ key: 'progress-steps' }))?.text ?? ''
+  expect(row).toContain('◌')
+  expect(row).toContain('2/3')
   await ui.unmount()
 })
 
-test('re-reporting the same step keeps its creep; subagent work creeps the main row', async ($, on) => {
+// Rewritten for progress v2: subagent work still moves the main row, but only its buffer.
+test('re-reporting the same step keeps its buffer; subagent work grows the main row buffer only', async ($, on) => {
   on('ui.render', engineBand)
   touchTool(on)
   await $.tool.call({ tool: TOOL, total: 5, done: 0, label: 'plan' } as never)
   const ui = await mountBand($)
-  const fill = async () => ((await ui.find({ key: 'progress-steps-track' }))?.children[0] as any)?.props?.flexGrow ?? 0
+  const grow = async (part: string) => ((await ui.find({ key: `progress-steps-${part}` })) as any)?.props?.flexGrow ?? 0
   await $.tool.call({ tool: 'mcp__fake__touch', agentId: 'sub-1' } as never)
   await $.tool.call({ tool: 'mcp__fake__touch', agentId: 'sub-1' } as never)
-  const crept = await fill()
+  const crept = await grow('buffer')
   expect(crept).toBeGreaterThan(0)
+  expect(await grow('committed')).toBe(0)
   await $.tool.call({ tool: TOOL, total: 5, done: 0, label: 'plan', step: 'Source' } as never)
-  expect(await fill()).toBe(crept)
+  expect(await grow('buffer')).toBe(crept)
+  expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('0/5')
   await ui.unmount()
 })
 

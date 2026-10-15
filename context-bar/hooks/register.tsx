@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { BarCategory, Snapshot } from '../types'
+import type { BarCategory, ProgressState, Snapshot } from '../types'
 import {
   ACTIVE_PATH,
   PENDING_DIR,
@@ -13,17 +13,24 @@ import {
   progressRows,
   seeded,
   skillSections,
-  ticketSections,
+  ticketSectionStates,
 } from './progress'
+import { EMIT_SPEC, EMIT_TOOL, normalizeEmit, outcomeText } from './progress/events'
+import { applyLegacyPlan, currentPlan, hasOpenEmitRun, migrateSteps } from './progress/legacy'
+import { type Action, emptyState, isTerminal, nextDue, reduce } from './progress/reducer'
+import { diagnosticsText, primaryRun, runView } from './progress/view'
 
 const snapshot = atom({ plugin: 'context-bar', key: 'snapshot' } as const, null)
 // Why the last refresh produced no full breakdown; shown while there is no snapshot.
 const diag = atom({ plugin: 'context-bar', key: 'diag' } as const, null)
 // Whether the per-category legend is shown; collapsed by default, the header and bar always are.
 const detailsOpen = atom({ plugin: 'context-bar', key: 'detailsOpen' } as const, false)
-// The progress row: the sections of the ticket or skill being worked through (or the
-// model's own plan), advanced by its reports and by ticked ticket boxes.
+// v1's progress row: read once at load to migrate into `progress`, then cleared.
 const steps = atom({ plugin: 'context-bar', key: 'steps' } as const, null)
+// Progress v2: every run's committed / buffer / liveness layers, the legacy
+// adapter's plan and the diagnostics. Its own atom: context never reads it and
+// it never reads context.
+const progress = atom({ plugin: 'context-bar', key: 'progress' } as const, emptyState(), { shape: 'progress-v2' })
 
 const FREE_COLOR = 'inactive'
 const TICK_COLOR = 'warning'
@@ -149,42 +156,106 @@ const toggleDetails = async ($: EngineInterface) => {
 
 const registerProgressTool = async ($: EngineInterface) => {
   try {
+    // The deprecated v1 report, kept for skills that still send done/total.
     await $.tool.register(PROGRESS_SPEC)
+    await $.tool.register(EMIT_SPEC)
   } catch {
     // Not bound yet or refused: the bar works without source 1.
   }
+  try {
+    await $.command.register({
+      name: 'progress',
+      description: 'Progress runs and diagnostics; "dismiss" hides ended runs',
+      argumentHint: '[dismiss]',
+      immediate: true,
+    })
+  } catch {
+    // No command: the band still draws.
+  }
 }
 
-// A turn that ended short of the total leaves the row dimmed, not "running". A whole
-// turn after that with no report drops a skill's or a plan's row; a ticket's stays,
-// since its file still says where the work stands.
-const pauseSteps = async ($: EngineInterface) => {
-  const s = await read($, steps)
-  if (s === null || s.done >= s.total) return
-  await update($, steps, () => (s.paused && s.source !== 'ticket' ? null : { ...s, paused: true }))
+// The host's time; a host without a clock (some test kits) falls back to the environment's.
+const now = async ($: EngineInterface) => {
+  try {
+    return await $.clock.now()
+  } catch {
+    return Date.now()
+  }
 }
 
-// Completed rows stay until the next prompt; unfinished ones carry on.
-const clearFinished = async ($: EngineInterface) => {
-  const s = await read($, steps)
-  if (s !== null && s.done >= s.total) await update($, steps, () => null)
+// Whether this load has looked for a v1 row to migrate, and the surface last drawn on.
+let migrated = false
+let lastSurface = 'none'
+
+const ensureMigrated = async ($: EngineInterface) => {
+  if (migrated) return
+  migrated = true
+  try {
+    const old = await read($, steps)
+    if (old === null) return
+    const at = await now($)
+    await update($, progress, s => (s.order.length === 0 && s.legacy === null ? migrateSteps(old, at) : s))
+    await update($, steps, () => null)
+  } catch {
+    // Unreadable v1 state: progress starts empty, the context bar is untouched.
+  }
 }
+
+// One timer for whatever the reducer has due with no event: a run going
+// stale, a completed one fading.
+let tickTimer: { cancel: () => void } | null = null
+let tickDue: number | null = null
+
+const scheduleTick = async ($: EngineInterface, s: ProgressState) => {
+  const due = nextDue(s)
+  if (due === tickDue) return
+  tickTimer?.cancel()
+  tickTimer = null
+  tickDue = due
+  if (due === null) return
+  const at = await now($)
+  try {
+    tickTimer = $.clock.after(Math.max(1, due - at), () => {
+      tickTimer = null
+      tickDue = null
+      void (async () => {
+        const t = await now($)
+        await commit($, s2 => reduce(s2, { kind: 'tick', at: t }).state)
+      })()
+    })
+  } catch {
+    // No timers here: stale and fade wait for the next event instead.
+    tickDue = null
+  }
+}
+
+// Every progress write: migrate first, fold, then re-arm the timer.
+const commit = async ($: EngineInterface, fn: (s: ProgressState) => ProgressState) => {
+  await ensureMigrated($)
+  let next: ProgressState | null = null
+  await update($, progress, s => (next = fn(s)))
+  if (next !== null) await scheduleTick($, next)
+}
+
+const act = ($: EngineInterface, action: Action) => commit($, s => reduce(s, action).state)
 
 // Which ticket this session's calls have named, its file's last seen mtime, and
 // whether the session has started working (a skill preloaded before that seeds nothing).
 let touched: string | null = null
 let lastMtime = -1
 let hasWorked = false
+// Ids for tool calls that carry no tool_use_id.
+let callSeq = 0
 
 const clearProgress = async ($: EngineInterface) => {
-  await update($, steps, () => null)
+  await commit($, () => emptyState())
   touched = null
   lastMtime = -1
 }
 
 // After a main-loop tool call: once this session's calls have named the active ticket
 // (reading it counts) and while its file is in Pending/, the row is that ticket's
-// sections; a ticked section moves it on.
+// sections; a ticked section commits that section's stage.
 const syncTicket = async ($: EngineInterface, call: unknown) => {
   let id: string | null = null
   try {
@@ -193,10 +264,16 @@ const syncTicket = async ($: EngineInterface, call: unknown) => {
   } catch {
     // No active ticket.
   }
-  const shown = await read($, steps)
+  const state = await read($, progress)
+  // A workflow reporting through progress_emit owns the band; the file stands aside.
+  if (hasOpenEmitRun(state)) return
+  const shown = currentPlan(state)
+  const shownRun = state.legacy !== null ? state.runs[state.legacy.runId] : undefined
   const isShownTicket = shown !== null && shown.source === 'ticket'
+  const isOpen = shownRun !== undefined && !isTerminal(shownRun)
+  const at = await now($)
   // Another ticket (or none) is active now: drop the old one's unfinished row.
-  if (isShownTicket && shown.label !== id && shown.done < shown.total) await update($, steps, () => null)
+  if (isShownTicket && shown.label !== id && isOpen) await commit($, s => applyLegacyPlan(s, null, at))
   if (id === null) return
   if (touched !== id) {
     // A reload forgets `touched` but the row survives: its ticket still counts as named.
@@ -207,22 +284,30 @@ const syncTicket = async ($: EngineInterface, call: unknown) => {
   const name = pendingName(await $.fs.list(PENDING_DIR), id)
   if (name === null) {
     // Left Pending/ (delivered or void) short of done: the row would freeze, so drop it.
-    if (isShownTicket && shown.label === id && shown.done < shown.total) await update($, steps, () => null)
+    if (isShownTicket && shown.label === id && isOpen) await commit($, s => applyLegacyPlan(s, null, at))
     return
   }
   const file = `${PENDING_DIR}/${name}`
   const { mtimeMs } = await $.fs.stat(file)
   if (mtimeMs === lastMtime) return
   lastMtime = mtimeMs
-  const { names, finished } = ticketSections(await $.fs.read(file))
+  const { names, finished } = ticketSectionStates(await $.fs.read(file))
   if (names.length === 0) return
-  await update($, steps, prev => {
+  const count = finished.filter(Boolean).length
+  await commit($, s => {
+    const prev = currentPlan(s)
     if (prev === null || prev.source !== 'ticket' || prev.label !== id || prev.total !== names.length) {
-      return seeded('ticket', id, names, finished)
+      return applyLegacyPlan(s, seeded('ticket', id, names, count), at, finished)
     }
-    const done = Math.min(prev.total, Math.max(finished, prev.reported))
-    return { ...prev, sections: names, mech: finished, done, step: names[done] ?? null, calls: done === prev.done ? prev.calls : 0 }
+    const done = Math.min(prev.total, Math.max(count, prev.reported))
+    return applyLegacyPlan(s, { ...prev, sections: names, mech: count, done, step: names[done] ?? null }, at, finished)
   })
+}
+
+// `mcp__server__tool` → `server:tool`; a built-in keeps its name. Never its arguments.
+const toolLabel = (tool: string) => {
+  const m = /^mcp__(.+?)__(.+)$/.exec(tool)
+  return (m ? `${m[1]}:${m[2]}` : tool).slice(0, 40)
 }
 
 export const register: Register = on => {
@@ -230,6 +315,8 @@ export const register: Register = on => {
     const r = await next(e)
     await registerProgressTool($)
     await loadPrefs($)
+    // A reload keeps the runs but loses the calls that were in flight.
+    await act($, { kind: 'reload', at: await now($) })
     await refresh($)
     return r
   })
@@ -267,30 +354,82 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const r = await next(e)
     hasWorked = true
-    await clearFinished($)
+    // A run waiting for the person resumes; a completed one leaves the band.
+    await act($, { kind: 'prompt', at: await now($) })
     await refresh($)
     return r
   })
 
-  // The progress tool is the mod's own and harmless: never a permission prompt.
-  on('tool.check', { tool: 'mcp__context-bar__progress' }, ($, e, next) =>
-    e.tool === PROGRESS_TOOL ? { decision: 'allow' } : next(e),
+  // The progress tools are the mod's own and harmless: never a permission prompt.
+  on('tool.check', { tool: ['mcp__context-bar__progress', 'mcp__context-bar__progress_emit'] }, ($, e, next) =>
+    e.tool === PROGRESS_TOOL || e.tool === EMIT_TOOL ? { decision: 'allow' } : next(e),
   )
 
-  // Serves the progress tool; after any other main-loop call, re-reads the ticket.
+  // /progress: the runs and why events were refused; `/progress dismiss` hides ended runs.
+  on('command.run', { command: 'progress' }, async ($, e) => {
+    const at = await now($)
+    if (e.args.trim() === 'dismiss') await act($, { kind: 'dismiss', at })
+    await ensureMigrated($)
+    return { text: diagnosticsText(await read($, progress), at, lastSurface) }
+  })
+
+  // Serves the progress tools. Any other call is activity (buffer and liveness,
+  // never committed); after a main-loop call the ticket is read again.
   on('tool.call', async ($, e, next) => {
     if (e.tool === PROGRESS_TOOL) {
       if (e.agentId !== undefined) return { result: 'progress is tracked for the main conversation only' }
-      const reported = applyReport(await read($, steps), e as unknown as Record<string, unknown>)
-      await update($, steps, () => reported)
-      return { result: `${reported.done}/${reported.total}` }
+      const at = await now($)
+      let shown = 'ignored: a progress_emit run is reporting this work'
+      await commit($, s => {
+        if (hasOpenEmitRun(s)) return s
+        const n = applyLegacyPlan(s, applyReport(currentPlan(s), e as unknown as Record<string, unknown>), at)
+        const run = n.legacy !== null ? n.runs[n.legacy.runId] : undefined
+        if (run !== undefined) shown = `${run.committed.completedStages.length}/${run.manifest.stages.length}`
+        return n
+      })
+      return { result: shown }
     }
-    const r = await next(e)
+    if (e.tool === EMIT_TOOL) {
+      const at = await now($)
+      let answer = ''
+      await commit($, s => {
+        const ev = normalizeEmit(e as unknown as Record<string, unknown>, s, { at, agentId: e.agentId })
+        if ('error' in ev) {
+          answer = outcomeText({ accepted: false, code: 'invalid-event', detail: ev.error })
+          return s
+        }
+        const { state, outcome } = reduce(s, { kind: 'event', event: ev }, e.agentId)
+        answer = outcomeText(outcome)
+        return state
+      })
+      return { result: answer }
+    }
+    // Bookkeeping around the call never fails it: a progress error is swallowed,
+    // so the tool runs exactly once whatever the state does.
+    const activityId = e.tool_use_id ?? `call-${++callSeq}`
+    try {
+      await act($, {
+        kind: 'tool.start',
+        activityId,
+        name: toolLabel(e.tool),
+        actor: e.agentId !== undefined ? 'subagent' : 'main',
+        agentId: e.agentId,
+        at: await now($),
+      })
+    } catch {
+      // Progress unavailable: the call goes ahead untracked.
+    }
+    let r: Awaited<ReturnType<typeof next>>
+    try {
+      r = await next(e)
+    } finally {
+      try {
+        await act($, { kind: 'tool.end', activityId, at: await now($) })
+      } catch {
+        // As above.
+      }
+    }
     hasWorked = true
-    // Work between two reports, a subagent's included, moves the bar within the
-    // current step; only a report resumes a paused row.
-    const s = await read($, steps)
-    if (s !== null && s.done < s.total && !s.paused) await update($, steps, () => ({ ...s, calls: s.calls + 1 }))
     if (e.agentId === undefined) {
       try {
         await syncTicket($, e)
@@ -308,10 +447,14 @@ export const register: Register = on => {
   on('skill.prompt', async ($, e, next) => {
     const r = await next(e)
     const sections = skillSections(r.text)
-    const shown = await read($, steps)
-    const isTicketBusy = shown !== null && shown.source === 'ticket' && shown.done < shown.total
-    if (hasWorked && sections.length >= 2 && !isTicketBusy) {
-      await update($, steps, () => seeded('skill', e.skill, sections, 0))
+    if (hasWorked && sections.length >= 2) {
+      const at = await now($)
+      await commit($, s => {
+        const shown = currentPlan(s)
+        const run = s.legacy !== null ? s.runs[s.legacy.runId] : undefined
+        const isTicketBusy = shown !== null && shown.source === 'ticket' && run !== undefined && !isTerminal(run)
+        return isTicketBusy || hasOpenEmitRun(s) ? s : applyLegacyPlan(s, seeded('skill', e.skill, sections, 0), at)
+      })
     }
     return { text: `${r.text}\n\n${PROMPT_SECTION.text}` }
   })
@@ -321,9 +464,11 @@ export const register: Register = on => {
     return e.tools.includes(PROGRESS_TOOL) ? { sections: [...r.sections, PROMPT_SECTION] } : r
   })
 
+  // The main turn ended with a run open: it waits for the person, dimmed, and
+  // stays until the next prompt resumes it or it goes stale.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if ((e as { agentId?: string }).agentId === undefined) await pauseSteps($)
+    if ((e as { agentId?: string }).agentId === undefined) await act($, { kind: 'turn.ended', at: await now($) })
     return r
   })
 
@@ -336,10 +481,13 @@ export const register: Register = on => {
     // box, so it gets the glyph mascot instead.
     const { Svg } = $.ui.resolve(e) as unknown as { Svg?: unknown }
     const mascotSvg = e.surface === 'terminal' ? undefined : Svg
+    lastSurface = e.surface
 
-    const blocks = progressRows(await read($, steps), { Box, Text, Svg: mascotSvg } as never)
+    const run = primaryRun(await read($, progress))
+    const view = run !== null ? runView(run, await now($)) : null
+    const blocks = progressRows(view, { Box, Text, Svg: mascotSvg } as never)
     // Progress sits above the context bar, one blank row between them.
-    const progress =
+    const progressBox =
       blocks.length > 0 ? (
         <Box key="progress" flexDirection="column" rowGap={1} marginBottom={1}>
           {blocks}
@@ -350,7 +498,7 @@ export const register: Register = on => {
       const why = await read($, diag)
       return (
         <Box key="context-bar" flexDirection="column">
-          {progress}
+          {progressBox}
           <Text>
             <Text color="claude">◆ </Text>
             <Text bold>context </Text>
@@ -403,7 +551,7 @@ export const register: Register = on => {
 
     return (
       <Box key="context-bar" flexDirection="column" borderStyle="round" borderColor={FREE_COLOR} paddingX={1}>
-        {progress}
+        {progressBox}
         {header}
         {/* Proportional colour blocks, not glyphs: a desktop font draws █ wider than a cell, so a glyph bar wraps. */}
         <Box key="bar" flexDirection="row" width="100%" height={1}>
