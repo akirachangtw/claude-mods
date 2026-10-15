@@ -1,11 +1,11 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { ProgressEvent, ProgressState, StepProgress, WorkflowManifest } from '../types'
-import { seeded } from './progress'
+import { BUFFER_TINT, seeded } from './progress'
 import { applyLegacyPlan, migrateSteps } from './progress/legacy'
 import { TICKET_AUTHOR } from './progress/manifests'
-import { type Action, FADE_MS, STALE_MS, emptyState, reduce, stageCeiling } from './progress/reducer'
-import { primaryRun, runView } from './progress/view'
+import { type Action, FADE_MS, STALE_MS, emptyState, nextDue, reduce, stageCeiling } from './progress/reducer'
+import { PRIMARY_HOLD_MS, primaryRun, runView, shownRun } from './progress/view'
 
 // ---- helpers -----------------------------------------------------------------
 
@@ -480,4 +480,290 @@ test('an open progress_emit run owns the band: skill headings and done/total rep
   const { text } = await $.command.run({ command: 'progress', args: '' } as never)
   expect(text).toContain('1 run(s)')
   await ui.unmount()
+})
+
+// ---- Band layout (P1.5) ----------------------------------------------------------
+// The kit draws trees, never a surface's paint: these pin the structure that
+// keeps the cat inside its own row, not the pixels.
+
+const bandOf = (cols: number) => ({ ...(BAND as object), bodyColumns: cols }) as never
+
+test('desktop band: progress sits above the context header, the track grows to the cat instead of a fixed row', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  on('session.usage', () => ({ value: { startedAt: 0, rateLimits: [], context: { tokens: 1, window: 10, percent: 10 } } }) as never)
+  on('session.measure', () => ({ changed: ['context'] }) as never)
+  await $.session.measure({ context: { window: 10 }, rateLimits: [], changed: ['context'] } as never)
+  await emit($, { type: 'run.started', workflowId: 'ticket-author', label: 'ticket-author T01' })
+  await emit($, { type: 'checkpoint.completed', stageId: 'bootstrap', checkpointId: 'templates-loaded' })
+  const ui = await $.ui.mount({ plugin: 'context-bar', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree.indexOf('"progress"')).toBeLessThan(tree.indexOf('"header"'))
+  const track = (await ui.find({ key: 'progress-steps-track' })) as any
+  expect(track.props.height).toBeUndefined()
+  expect(track.props.minHeight).toBe(1)
+  expect(track.props.alignItems).toBe('center')
+  const cat = (await ui.find({ type: 'Svg' })) as any
+  expect(cat.props.height).toBeLessThanOrEqual(16)
+  expect(String(cat.props.source)).toContain('height="16"')
+  for (const part of ['committed', 'rest']) {
+    expect(((await ui.find({ key: `progress-steps-${part}` })) as any).props.height).toBe(1)
+  }
+  await ui.unmount()
+})
+
+test('a tool call does not change the cat: same source and alt before, during and after it', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  let ui: any = null
+  const cat = async () => {
+    const p = ((await ui.find({ type: 'Svg' })) as any).props
+    return `${p.alt}|${p.source}`
+  }
+  let during = ''
+  let liveDuring = ''
+  const anyOn = on as any
+  anyOn('tool.check', { tool: 'mcp__fake__slow' }, () => ({ decision: 'allow' }))
+  anyOn('tool.call', { tool: 'mcp__fake__slow' }, async () => {
+    during = await cat()
+    liveDuring = (await ui.find({ key: 'progress-steps-live' }))?.text ?? ''
+    return { result: 'ok' }
+  })
+  await emit($, { type: 'run.started', workflowId: 'ticket-author' })
+  ui = await $.ui.mount({ plugin: 'context-bar', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const before = await cat()
+  await $.tool.call({ tool: 'mcp__fake__slow' } as never)
+  expect(liveDuring).toContain('⧗ fake:slow')
+  expect(during).toBe(before)
+  expect(await cat()).toBe(before)
+  await ui.unmount()
+})
+
+test('80-column terminal: the label truncates, the count and percent keep their own cell', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  await emit($, { type: 'run.started', workflowId: 'ticket-author', label: 'ticket-author ' + 'a-very-long-ticket-name-'.repeat(4) })
+  for (const cols of [80, 120, 160]) {
+    const ui = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'AbovePrompt', props: bandOf(cols) })
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    const title = (await ui.find({ key: 'progress-steps-title' })) as any
+    expect(title.props.width).toBe(0)
+    expect(title.props.flexGrow).toBe(1)
+    expect(JSON.stringify(title.children)).toContain('truncate-end')
+    const head = (await ui.find({ key: 'progress-steps-head' }))?.text ?? ''
+    expect(head).toContain('0/7')
+    expect(head).toContain('0%')
+    expect(((await ui.find({ key: 'progress-steps-track' })) as any).props.height).toBe(1)
+    await ui.unmount()
+  }
+})
+
+// Option A (P1.5 ruling): nothing redraws the band while a call runs, so any
+// seconds shown froze for the whole call in the recording. The band says what
+// the run is doing instead, and shows no times at all.
+test('no frozen seconds: the band names the tool or the state, never a time', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  on('turn.complete', () => ({ text: '' }) as never)
+  let ui: any = null
+  let live = ''
+  let head = ''
+  const anyOn = on as any
+  anyOn('tool.check', { tool: 'mcp__fake__slow' }, () => ({ decision: 'allow' }))
+  anyOn('tool.call', { tool: 'mcp__fake__slow' }, async () => {
+    live = (await ui.find({ key: 'progress-steps-live' }))?.text ?? ''
+    head = (await ui.find({ key: 'progress-steps-head' }))?.text ?? ''
+    return { result: 'ok' }
+  })
+  await emit($, { type: 'run.started', workflowId: 'ticket-author' })
+  await clock.advance(8_000)
+  ui = await $.ui.mount({ plugin: 'context-bar', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  await $.tool.call({ tool: 'mcp__fake__slow' } as never)
+  expect(live).toBe('⧗ fake:slow')
+  expect(head).not.toMatch(/\d+s\b|Run /)
+  expect((await ui.find({ key: 'progress-steps-live' }))?.text).toBe('working')
+  await $.turn.complete({ reason: 'answer', answer: 'done' } as never)
+  expect((await ui.find({ key: 'progress-steps-live' }))?.text).toBe('waiting for you')
+  expect(JSON.stringify(await ui.drawn())).not.toMatch(/\d+s"/)
+  await ui.unmount()
+})
+
+test('buffer is a light tint: apart from the committed fill and lighter than a finished look', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  const anyOn = on as any
+  anyOn('tool.check', { tool: 'mcp__fake__touch' }, () => ({ decision: 'allow' }))
+  anyOn('tool.call', { tool: 'mcp__fake__touch' }, () => ({ result: 'ok' }))
+  await emit($, { type: 'run.started', workflowId: 'ticket-author' })
+  await emit($, { type: 'checkpoint.completed', stageId: 'bootstrap', checkpointId: 'templates-loaded' })
+  await emit($, { type: 'stage.started', stageId: 'intake' })
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'mcp__fake__touch' } as never)
+  const ui = await $.ui.mount({ plugin: 'context-bar', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  const bg = async (part: string) => ((await ui.find({ key: `progress-steps-${part}` })) as any)?.props?.backgroundColor
+  expect(await bg('committed')).toBe('claude')
+  expect(await bg('buffer')).toBe(BUFFER_TINT)
+  expect(await bg('rest')).toBe('subtle')
+  await ui.unmount()
+})
+
+// Found in the P1.5 recording: a cancelled run stayed on the band for minutes
+// and took it back once a later run faded.
+test('a cancelled run fades like a completed one and does not return after a later run fades', () => {
+  const old = runEvents('old')
+  const cur = runEvents('cur')
+  let s = fold(emptyState(), old('run.started'), old('run.cancelled'), cur('run.started', {}, T0 + 10), cur('run.completed', {}, T0 + 10))
+  s = fold(s, { kind: 'tick', at: T0 + FADE_MS })
+  expect(s.runs.old!.hidden).toBe(true)
+  s = fold(s, { kind: 'tick', at: T0 + 10 + FADE_MS })
+  expect(s.runs.cur!.hidden).toBe(true)
+  expect(primaryRun(s)).toBeNull()
+  // A failed run is still the exception: it stays.
+  const bad = runEvents('bad')
+  const f = fold(emptyState(), bad('run.started'), bad('run.failed'), { kind: 'tick', at: T0 + 3_600_000 })
+  expect(primaryRun(f)?.runId).toBe('bad')
+})
+
+// ---- P2: divider, multi-run summary, switch hold, column fallback ------------------
+
+test('a divider separates progress from the context header; none without a run', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  on('session.usage', () => ({ value: { startedAt: 0, rateLimits: [], context: { tokens: 1, window: 10, percent: 10 } } }) as never)
+  on('session.measure', () => ({ changed: ['context'] }) as never)
+  await $.session.measure({ context: { window: 10 }, rateLimits: [], changed: ['context'] } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const bare = await $.ui.mount({ plugin: 'context-bar', surface, component: 'AbovePrompt', props: BAND })
+    expect(await bare.find({ key: 'progress-divider' })).toBeUndefined()
+    await bare.unmount()
+  }
+  await emit($, { type: 'run.started', workflowId: 'rgr' })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'context-bar', surface, component: 'AbovePrompt', props: BAND })
+    const tree = JSON.stringify(await ui.drawn())
+    const at = (k: string) => tree.indexOf(`"${k}"`)
+    expect(at('progress-steps')).toBeLessThan(at('progress-divider'))
+    expect(at('progress-divider')).toBeLessThan(at('header'))
+    const rule = (await ui.find({ key: 'progress-divider' })) as any
+    expect(rule.props.height).toBe(1)
+    expect(rule.text).toMatch(/^─+$/)
+    expect(JSON.stringify(rule.children)).toContain('truncate-end')
+    // BAND is 100 columns: 96 cells inside the border. The terminal's rule fills
+    // them; the desktop's (found in the P2 recordings: a full row of ─ overflowed
+    // into an ellipsis, and an Svg line drew nothing) is shorter and centred.
+    if (surface === 'terminal') {
+      expect(rule.text.length).toBe(96)
+      expect(rule.props.justifyContent).toBe('flex-start')
+    } else {
+      expect(rule.text.length).toBe(81)
+      expect(rule.props.justifyContent).toBe('center')
+    }
+    await ui.unmount()
+  }
+})
+
+test('several runs: the band shows one and sums up the rest as +N background', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  await emit($, { type: 'run.started', workflowId: 'ticket-author', label: 'main ticket' })
+  // The kit drops agentId from a call's input, so these two start as further
+  // runs of the main conversation; the main one keeps the band by committing.
+  await $.tool.call({ tool: EMIT, runId: 'sub-rgr', type: 'run.started', workflowId: 'rgr' } as never)
+  await $.tool.call({ tool: EMIT, runId: 'sub-exec', type: 'run.started', workflowId: 'execution-ticket' } as never)
+  await emit($, { type: 'checkpoint.completed', stageId: 'bootstrap', checkpointId: 'templates-loaded' })
+  // Full words from 80 columns (the desktop band is about 95); `+N` alone below.
+  for (const [cols, others] of [[160, '+2 background'], [120, '+2 background'], [80, '+2 background'], [60, '+2']] as const) {
+    const ui = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'AbovePrompt', props: bandOf(cols) })
+    expect((await ui.find({ key: 'progress-steps-head' }))?.text).toContain('main ticket')
+    expect((await ui.findAll({ key: 'progress-steps' })).length).toBe(1)
+    expect((await ui.find({ key: 'progress-steps-others' }))?.text).toBe(others)
+    await ui.unmount()
+  }
+  // An ended run is no longer counted (a failed one would take the band instead).
+  await $.tool.call({ tool: EMIT, runId: 'sub-exec', type: 'run.cancelled' } as never)
+  const ui = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'AbovePrompt', props: bandOf(160) })
+  expect((await ui.find({ key: 'progress-steps-head' }))?.text).toContain('main ticket')
+  expect((await ui.find({ key: 'progress-steps-others' }))?.text).toBe('+1 background')
+  await ui.unmount()
+})
+
+test('switch hold: an equal-rank run waits its turn; one that needs the person takes over at once', () => {
+  const a = runEvents('a')
+  const b = runEvents('b')
+  let s = fold(emptyState(), a('run.started'), a('checkpoint.completed', { stageId: 'bootstrap', checkpointId: 'templates-loaded' }))
+  expect(s.primary?.runId).toBe('a')
+  // b commits later: it would win, but a holds the band for PRIMARY_HOLD_MS.
+  s = fold(s, b('run.started', {}, T0 + 500), b('checkpoint.completed', { stageId: 'bootstrap', checkpointId: 'templates-loaded' }, T0 + 600))
+  expect(s.primary).toMatchObject({ runId: 'a', held: 'b' })
+  expect(shownRun(s)?.runId).toBe('a')
+  // A burst of activity inside the hold changes nothing.
+  for (let i = 0; i < 10; i++) s = fold(s, toolStart(`x${i}`, T0 + 700 + i), toolEnd(`x${i}`, T0 + 700 + i))
+  expect(shownRun(s)?.runId).toBe('a')
+  expect(nextDue(s)).toBe(T0 + PRIMARY_HOLD_MS)
+  s = fold(s, { kind: 'tick', at: T0 + PRIMARY_HOLD_MS })
+  expect(shownRun(s)?.runId).toBe('b')
+  // a now asks for the person: it outranks b and takes the band back at once.
+  s = fold(s, a('run.waiting', { message: 'approve' }, T0 + PRIMARY_HOLD_MS + 10))
+  expect(shownRun(s)?.runId).toBe('a')
+  expect(s.primary?.held).toBeUndefined()
+})
+
+test('the shown run leaving the band hands it over at once', () => {
+  const a = runEvents('a')
+  const b = runEvents('b')
+  let s = fold(emptyState(), a('run.started'), b('run.started', {}, T0 + 1))
+  expect(shownRun(s)?.runId).toBe('a')
+  s = fold(s, a('run.cancelled', {}, T0 + 2), { kind: 'tick', at: T0 + 2 + FADE_MS })
+  expect(s.runs.a!.hidden).toBe(true)
+  expect(shownRun(s)?.runId).toBe('b')
+})
+
+// Found in the P2 recording: a run that commits by moving to its next stage (an
+// execution ticket's stages have no checkpoints) never took the band, because
+// only checkpoints stamped the commit time.
+test('a commit by stage move counts: the run takes the band after the hold', () => {
+  const a = runEvents('a')
+  const c = runEvents('c', 'execution-ticket')
+  let s = fold(emptyState(), a('run.started'), a('checkpoint.completed', { stageId: 'bootstrap', checkpointId: 'templates-loaded' }))
+  s = fold(s, c('run.started', {}, T0 + 100), c('stage.started', { stageId: 'plan' }, T0 + 200))
+  expect(s.runs.c!.committed.percent).toBe(10)
+  expect(s.runs.c!.liveness.lastCommittedAt).toBe(T0 + 200)
+  expect(s.primary).toMatchObject({ runId: 'a', held: 'c' })
+  s = fold(s, { kind: 'tick', at: T0 + PRIMARY_HOLD_MS })
+  expect(shownRun(s)?.runId).toBe('c')
+})
+
+// Found in the P2 recording: a cancelled run still showed the words it waited with.
+test('a wait reason shows while waiting and leaves with the wait', () => {
+  const a = runEvents('a')
+  let s = fold(emptyState(), a('run.started'), a('run.waiting', { message: 'approve the plan' }))
+  expect(runView(s.runs.a!, T0).detail).toBe('approve the plan')
+  s = fold(s, a('run.cancelled'))
+  expect(runView(s.runs.a!, T0).detail).toBe('Bootstrap')
+  // The host's own "turn ended" is no reason worth a title.
+  const b = runEvents('b')
+  const t = fold(emptyState(), b('run.started'), { kind: 'turn.ended', at: T0 + 1 })
+  expect(runView(t.runs.b!, T0).detail).toBe('Bootstrap')
+})
+
+// Found in the P2 re-run: cancelling a group showed one fading run, then another.
+test('when runs end together, the shown one stays until it fades; a failed one still takes over', () => {
+  const a = runEvents('a')
+  const c = runEvents('c', 'execution-ticket')
+  let s = fold(emptyState(), a('run.started'), c('run.started', {}, T0 + 1), c('stage.started', { stageId: 'plan' }, T0 + 2))
+  s = fold(s, { kind: 'tick', at: T0 + 10_000 })
+  expect(shownRun(s)?.runId).toBe('c')
+  s = fold(s, c('run.cancelled', {}, T0 + 10_001), a('run.cancelled', {}, T0 + 10_002))
+  expect(shownRun(s)?.runId).toBe('c')
+  // c fades first; a, still fading, does not step in for its last moment.
+  s = fold(s, { kind: 'tick', at: T0 + 10_001 + FADE_MS })
+  expect(s.runs.a!.hidden).toBeUndefined()
+  expect(shownRun(s)).toBeNull()
+  s = fold(s, { kind: 'tick', at: T0 + 10_002 + FADE_MS })
+  expect(primaryRun(s)).toBeNull()
+  // A failed run is not fading: it takes the band from a live one at once.
+  const x = runEvents('x')
+  const y = runEvents('y')
+  let f = fold(emptyState(), x('run.started'), y('run.started', {}, T0 + 1))
+  f = fold(f, y('run.failed', { message: 'boom' }, T0 + 2))
+  expect(shownRun(f)?.runId).toBe('y')
 })
