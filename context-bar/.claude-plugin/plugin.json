@@ -1,0 +1,6 @@
+{
+  "name": "context-bar",
+  "version": "0.1.0",
+  "description": "Persistent context-window usage bar above the prompt, broken down like /context",
+  "types": "./types/index.d.ts"
+}
