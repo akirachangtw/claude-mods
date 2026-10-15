@@ -255,8 +255,109 @@ context 類別、配色、compact tick、token 計算、`details` 開合與偏�
 - 每次工具呼叫會寫兩次 state（start／end）→ 兩次重繪；250ms 合併屬 P3 scheduler。
 - Skill 端的 Progress Contract：依使用者決定另開。
 
-## 六、未解風險（先列，實作中驗證）
+## 六、P1.5 交付紀錄：Desktop 版面與實機驗證（2026-10-15，已通過）
 
-- **SMIL 在 redraw 後是否重置**：Svg `isInteractive` 為沙箱 iframe，`source` 字串相同時是否重用未在 API 文件保證；需實測。退路是 `Client`。
+### 修正內容
+
+- **軌道列高度**：Desktop 的軌道列不再固定為一列高，改由小貓的高度決定（`minHeight: 1`、置中）；進度條各段仍維持一列高。Terminal 維持一列。
+- **小貓尺寸**：26×20 改為 21×16 CSS px，約一列文字高。
+- **動畫不重播**：`running` 與 `waiting-tool` 共用同一個姿態。修正前每次工具呼叫都會在兩個狀態間切換，SVG `source` 跟著改變，動畫就會重播。測試已證實：把舊的對應改回去時，新測試會失敗。
+- **buffer 顏色**：改為主色的淺色調 `#EDC3AE`；非執行中時改用剩餘段的中性灰。
+- **被取消的 run 也會淡出**：錄影發現被取消的 run 會一直留在畫面上，下一個 run 淡出後又會冒出來。現在 cancelled 和 completed 一樣，約 2 秒後淡出；failed 仍持續顯示到被關閉為止。
+- **移除所有秒數（方案 A）**：錄影顯示一個 20 秒的 Bash 期間，畫面一直停在 `⧗ Bash 2s` 與 `Run 7s`。原因是工具執行期間沒有任何 state 寫入，所以不會重繪。依裁決，工具耗時與 run 累計時間都不再顯示，改為狀態標籤：`⧗ <工具>`、`working`、`waiting for you`、`paused`、`no recent activity`、`lost track after a reload`、`done`、`cancelled`。`/progress` 的 last event 時間是在執行指令當下才計算，所以保留。
+
+### 實機驗證（錄影 0:20～1:05，以 OpenCV 每秒抽一格、小貓區塊逐格 30fps 分析）
+
+| 項目 | 結果 | 依據 |
+|---|---|---|
+| Progress 與 Context 不重疊 | **已驗證** | 整段沒有重疊；context 區在每一格的位置都沒變 |
+| band 高度穩定 | **已驗證** | 下方狀態列有沒有內容時，context 區都不會移動 |
+| buffer 淺色調 | **已驗證** | 0:24 起可見淺橘色 buffer，比 committed 淡、和剩餘段分得開 |
+| 正式進度只依 checkpoint 推進 | **已驗證** | 工具活動期間停在 `1/7 8%`；0:51 起依 checkpoint 逐步到 `7/7 100%` |
+| completed 約 2 秒淡出 | **已驗證** | 0:62～0:63 顯示 `✓`，0:64 消失 |
+| 小貓不閃爍 | **已驗證（依畫格判讀）** | 0:22～0:50 共 840 格，沒有任何一格小貓消失或只畫一半 |
+| 動畫不重播 | **已驗證（依畫格判讀）** | 7 次重繪，上下跳動週期量得 0.37 秒（設定 0.36 秒），每次重繪後的位置都不同 |
+
+### 根因說明
+
+- **已驗證**：修正後 Desktop band 不重疊。
+- **合理推測**：舊版重疊和小貓高度、固定一列高的軌道列，以及縮放後的實際邊界有關。
+- **未驗證**：沒有在舊 commit 上實機重現原本的問題。
+
+### 驗收素材
+
+截圖與錄影只用於 Desktop UI 差距診斷，存放在 `tmp/`，已加入 `.gitignore`，不追蹤也不提交。
+
+## 七、P2 交付紀錄：divider、多 run 摘要、切換防抖、欄寬 fallback（2026-10-15）
+
+範圍依裁決，只做這四項；不碰 P3 timer、Skill Progress Contract、動畫擴充或檔案結構重整。
+
+| 項目 | 做法 | 測試 |
+|---|---|---|
+| divider | progress 與 context header 之間加一列淡色 `─`，以 `truncate-end` 截成一行，Desktop 的寬字形也不會折行。沒有 run 時不顯示 | 兩種 surface 都確認排列順序為 progress → divider → header；沒有 run 時沒有 divider |
+| 多 run 摘要 | 只顯示 primary run；其他進行中的 run 在狀態列右側顯示 `+N background`。已結束的不計入 | 3 個 run 時顯示一張卡和 `+2 background`；取消一個後變成 `+1 background` |
+| 切換防抖 | 目前顯示的 run 至少維持 3 秒（`PRIMARY_HOLD_MS`），才會被同等優先的 run 取代；需要使用者處理的 run（waiting-user、failed）立即取代；目前的 run 離開畫面時立即交棒。等待中的切換由既有的單一 timer 在 3 秒到期時處理 | 等待期間的工具活動不會造成切換、3 秒後才切換、waiting-user 立即搶回、run 離開時立即交棒。把等待時間設為 0 時，這兩個測試會失敗 |
+| 80/120/160 欄 | 未滿 100 欄時，`+N background` 縮成 `+N`；標題與目前 stage 一起截斷，`done/total` 與百分比保持完整 | 80、120、160 欄分別驗證 |
+
+**狀態變更**：`ProgressState` 新增選填欄位 `primary: { runId, since, held? }`。這是相容擴充：舊值沒有這個欄位時，下一個事件就會補上，所以 shape tag 不需要升版。
+
+**驗證結果**：`claude plugin test context-bar` 64 pass / 0 fail；`mutation.mjs` 6/6 mutants killed；`claude plugin validate` 通過；新檔案沒有新增 TypeScript 錯誤。
+
+### P2 實機驗證（錄影 0:06～0:58，每秒抽一格）
+
+| 項目 | 結果 | 依據 |
+|---|---|---|
+| 沒有 run 時沒有 divider、不留空白 | **已驗證** | 0:06～0:07 只有 context bar |
+| `+N background` 顯示與遞減 | **已驗證** | 0:15 出現 `+1`、0:16 起 `+2`；取消後 0:49 變 `+1`、0:50 消失 |
+| waiting-user 立即搶回 band | **已驗證** | A 在 0:39 轉為 `⏸ 需要你確認`、`waiting for you` |
+| 全部取消後淡出、不留空白 | **已驗證** | 0:51～0:52 顯示 `cancelled`，0:53 只剩 context bar |
+| 同等優先的 run 在 3 秒後接手 | **未通過 → 已修正** | C 在約 0:27 推進 stage 後，畫面一直停在 A |
+| divider 在 Desktop 上 | **未通過 → 已修正** | 線的右端出現 `…` |
+| `+N background` 全字顯示 | **未通過 → 已修正** | Desktop 只顯示 `+2` |
+
+### 錄影發現的問題與修正
+
+1. **用推進 stage 完成的提交不算數**：C 是 execution ticket，它的 stage 沒有 checkpoint，所以是「進入下一個 stage」才完成上一個 stage。原本只有 checkpoint 與 child unit 會記錄提交時間（`lastCommittedAt`），導致 C 的提交不被計入，主 run 選擇永遠不會挑中 C。修正：只要 committed 百分比上升，不論原因都記錄提交時間。新增迴歸測試。
+2. **Desktop divider 出現 `…`**：Desktop 畫 `─` 比一格寬，`bodyColumns - 4` 個字元超出寬度，被截斷時補上省略號；所有 `truncate` 模式都會加省略號。修正：Desktop 改用 1px 的 SVG 線，寬度跟著所在位置；Terminal 維持文字線。
+3. **Desktop 只顯示 `+2`**：Desktop band 約 95 格寬，低於原本 100 欄的精簡門檻。修正：門檻改為 80 欄，80 欄以上顯示全字，60 欄測試顯示 `+2`。
+4. **等待理由殘留**：A 被取消後，標題仍顯示等待時的 `需要你確認`。修正：`run.waiting`／`run.paused` 的文字只存為等待理由，只在等待或暫停期間顯示；host 自己標記的 `turn ended` 不顯示。
+
+**修正後結果**：66 pass / 0 fail；6/6 mutants killed；`claude plugin validate` 通過。
+
+### P2 第二次實機驗證（錄影 0:04～0:50，2026-10-16）
+
+| 項目 | 結果 | 依據 |
+|---|---|---|
+| `+N background` 全字顯示 | **已驗證** | 0:13 `+1 background`、0:14 起 `+2 background` |
+| 同等優先的 run 在等待後接手 | **已驗證** | C 約 0:20 推進 stage，0:24 換成 `C 執行票 1/5 10%`（約 3～4 秒） |
+| waiting-user 立即搶回 band | **已驗證** | 0:40 為 `⏸ A 主 run 需要你確認` |
+| 等待理由不殘留 | **已驗證** | 0:49 A 取消後標題回到 `Bootstrap` |
+| 全部取消後淡出 | **已驗證** | 0:50 只剩 context bar |
+| Desktop divider | **未通過 → 已修正** | 該列每一行像素亮度都是 238，SVG 線根本沒畫出來 |
+| 一起結束時不閃動 | **未通過 → 已修正** | 0:48 顯示淡出中的 C，0:49 又換成淡出中的 A |
+
+**修正**
+5. **divider 沒畫出來**：SVG 沒有指定寬度時，會取所在位置的寬度，但它所在的那一列本身沒有明確寬度，所以畫成 0 寬。修正：divider 那一列改為 `width="100%"`，SVG 就能撐滿整列。
+6. **一起結束時閃動**：淡出中的 run 原本也能搶走 band。修正：淡出中的 run 可以保留 band，但只能在它結束的那一刻、而且 band 上沒有其他 run 時才能取得 band；之後不會再中途插入。failed 不算淡出，仍會立即搶回 band。新增迴歸測試。
+
+**結果**：67 pass / 0 fail；6/6 mutants killed；validate 通過。修正 5、6 需要再跑一次實機確認。
+
+### P2 第三次實機驗證（錄影 0:14～1:01）
+
+| 項目 | 結果 | 依據 |
+|---|---|---|
+| 一起取消時不閃動 | **已驗證** | 0:58 `+1 background`，0:59～1:00 只顯示 A `cancelled`，1:01 只剩 context bar，中途沒有換成 B 或 C |
+| Desktop divider | **未通過 → 已修正** | 第二次修正後依然沒有畫出線：那一列像素亮度沒有變化 |
+
+**修正 7：放棄 SVG 線，改用文字線。** 第一次錄影已證實文字線畫得出來，只是 Desktop 上 `─` 比一格寬，整列放滿會溢出並被補上 `…`。現在 Terminal 仍是整列的文字線；Desktop 只放可用寬度 85% 的 `─` 並置中，看起來是一條內縮的分隔線。SVG 線之所以畫不出來，**合理推測**是它沒有自己的寬度，被排版成 0 寬（未驗證）。
+
+**結果**：67 pass / 0 fail；6/6 mutants killed；validate 通過。修正 7 需要再跑一次實機確認，只看 divider。
+
+**觀察（不在 P2 範圍）**：主對話的工具呼叫會歸到「最新的 foreground run」，不一定是畫面上顯示的那個 run（0:25～0:32 C 顯示 `⧗ Bash`）。實務上子 run 多半由 subagent 建立、屬於 background，影響有限；記錄待後續評估。
+
+## 八、未解風險（先列，實作中驗證）
+
+- ~~**SMIL 在 redraw 後是否重置**~~：P1.5 錄影依畫格判讀為不重置（見第六節）。退路仍是 `Client`。
+- **工具執行期間不會重繪**：秒數已拿掉，但狀態列在長工具期間依然是靜止的。真正的即時更新屬 P3 timer。
 - **Skill 漏報**：只能顯示 active/stale，committed 會停住——這是規格要的行為，但使用者觀感上會「卡住」。
 - **Mutation 腳本**屬自製，非標準工具。
