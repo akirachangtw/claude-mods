@@ -1,6 +1,6 @@
 import type { LivenessStatus, StepProgress } from '../types'
 import { EMIT_TOOL } from './progress/events'
-import { formatElapsed, type RunView } from './progress/view'
+import type { RunView } from './progress/view'
 
 // Pure helpers for the progress rows; everything that calls $, and the state atoms
 // the engine scans for, live in register.tsx.
@@ -159,12 +159,19 @@ type Els = { Box: El; Text: El; Svg?: El }
 const FUR = '#B8865B'
 const EYE = '#2B1D16'
 
+// The desktop cat's box, in CSS pixels: about one text row tall.
+export const CAT_W = 21
+export const CAT_H = 16
+
 type Pose = 'run' | 'step' | 'sit' | 'hop' | 'droop' | 'sleep'
 
+// running and waiting-tool share a pose: every tool call flips between the two,
+// and a pose change is a new SVG source, which would restart the animation on
+// each call. The liveness line says which one it is.
 const POSE: Record<LivenessStatus, Pose> = {
   queued: 'sit',
   running: 'run',
-  'waiting-tool': 'step',
+  'waiting-tool': 'run',
   'waiting-user': 'sit',
   paused: 'sit',
   stale: 'sleep',
@@ -198,7 +205,7 @@ export const catSvg = (status: LivenessStatus) => {
   const blink = pose === 'sit' ? anim('height', '1;1;0.15;1', '3s', ' keyTimes="0;0.9;0.95;1"') : ''
   const zz = pose === 'sleep' ? `<text x="7" y="2" font-size="3" fill="${FUR}">z</text>` : ''
   return (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1 13 10" width="26" height="20" shape-rendering="crispEdges">' +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1 13 10" width="${CAT_W}" height="${CAT_H}" shape-rendering="crispEdges">` +
     `<g>${bob}` +
     `<rect x="1" y="${earY}" width="1" height="1" fill="${FUR}"/>` +
     `<rect x="4" y="${earY}" width="1" height="1" fill="${FUR}"/>` +
@@ -235,33 +242,60 @@ const MARK: Record<LivenessStatus, [string, string]> = {
   orphaned: ['?', 'inactive'],
 }
 
+// The buffer reads as "not done yet": a light tint of the running colour, lighter
+// than the committed fill and apart from the neutral rest of the track. Other
+// states draw no buffer tint, so nothing grey-on-grey looks finished.
+export const BUFFER_TINT = '#EDC3AE'
+
 const DIM = new Set<LivenessStatus>(['waiting-user', 'paused', 'stale', 'cancelled', 'orphaned'])
+
+// What the run is doing, said as a state, never as a time: nothing redraws the
+// band while a call runs, so any seconds shown would stand still and mislead.
+const STATUS_TEXT: Record<LivenessStatus, string> = {
+  queued: 'queued',
+  running: 'working',
+  'waiting-tool': 'running a tool',
+  'waiting-user': 'waiting for you',
+  paused: 'paused',
+  stale: 'no recent activity',
+  completed: 'done',
+  failed: 'failed',
+  cancelled: 'cancelled',
+  orphaned: 'lost track after a reload',
+}
+
+// Under this width the band drops what it can do without: `+N` alone. The
+// desktop band is about 95 cells, so it keeps the full words.
+export const COMPACT_COLUMNS = 80
+
+export type BlockOpts = { background: number; columns: number }
 
 // One progress block: a title line (status, label, stage; count and committed
 // percent on the right), a track whose solid fill is committed and whose lighter
-// extension is the buffer, the cat at the committed end, and a liveness line.
-const block = ({ Box, Text, Svg }: Els, key: string, v: RunView) => {
+// extension is the buffer, the cat at the committed end, and a liveness line
+// with the other runs summed up on its right.
+const block = ({ Box, Text, Svg }: Els, key: string, v: RunView, opts: BlockOpts) => {
   const [mark, color] = v.warning && v.status === 'completed' ? ['!', 'warning'] : MARK[v.status]
   const isDim = DIM.has(v.status)
+  const isCompact = opts.columns < COMPACT_COLUMNS
   const mascot =
     Svg !== undefined ? (
-      <Svg source={catSvg(v.status)} alt={`cat ${v.status}`} width={26} height={20} isInteractive />
+      <Svg key={`${key}-mascot`} source={catSvg(v.status)} alt={`cat ${POSE[v.status]}`} width={CAT_W} height={CAT_H} isInteractive />
     ) : (
       <Text color="claude">{CAT_GLYPH[POSE[v.status]]}</Text>
     )
   const committed = Math.max(0, Math.min(100, v.committed))
   const buffer = Math.max(committed, Math.min(100, v.buffer))
-  const live =
+  const state =
     v.error !== null
       ? v.error
-      : [
-          v.rgr,
-          v.activity !== null ? `⧗ ${v.activity}` : null,
-          v.status === 'stale' ? 'no activity' : v.status === 'waiting-user' ? 'waiting for you' : null,
-          formatElapsed(v.elapsedMs),
-        ]
-          .filter(x => x !== null)
-          .join(' · ')
+      : v.activity !== null
+        ? `⧗ ${v.activity}`
+        : v.status === 'completed' && v.warning
+          ? 'done · stages left open'
+          : STATUS_TEXT[v.status]
+  const live = [v.rgr, state].filter(x => x !== null).join(' · ')
+  const others = opts.background > 0 ? (isCompact ? `+${opts.background}` : `+${opts.background} background`) : null
   return (
     <Box key={key} flexDirection="column">
       <Box key={`${key}-head`} flexDirection="row" columnGap={2}>
@@ -277,21 +311,33 @@ const block = ({ Box, Text, Svg }: Els, key: string, v: RunView) => {
           <Text dimColor>{`  ${v.percent}%`}</Text>
         </Text>
       </Box>
-      <Box key={`${key}-track`} flexDirection="row" alignItems="center" height={1}>
+      {/* The desktop track takes the cat's height (no fixed one-row height for an
+          Svg to spill out of onto the rows around it); the bar stays one row,
+          centred on it. The terminal's cat is text, one row like the bar. */}
+      <Box key={`${key}-track`} flexDirection="row" alignItems="center" {...(Svg !== undefined ? { minHeight: 1 } : { height: 1 })}>
         {committed > 0 ? <Box key={`${key}-committed`} width={0} flexGrow={committed} height={1} backgroundColor={color} /> : null}
         {mascot}
-        {buffer > committed ? <Box key={`${key}-buffer`} width={0} flexGrow={buffer - committed} height={1} backgroundColor="inactive" /> : null}
+        {buffer > committed ? (
+          <Box key={`${key}-buffer`} width={0} flexGrow={buffer - committed} height={1} backgroundColor={color === 'claude' ? BUFFER_TINT : 'subtle'} />
+        ) : null}
         {buffer < 100 ? <Box key={`${key}-rest`} width={0} flexGrow={100 - buffer} height={1} backgroundColor="subtle" /> : null}
       </Box>
-      <Box key={`${key}-live`} flexDirection="row">
-        <Text wrap="truncate-end" dimColor>
-          {live}
-        </Text>
+      <Box key={`${key}-live`} flexDirection="row" columnGap={2}>
+        <Box key={`${key}-state`} width={0} flexGrow={1}>
+          <Text wrap="truncate-end" dimColor>
+            {live}
+          </Text>
+        </Box>
+        {others !== null ? (
+          <Box key={`${key}-others`}>
+            <Text dimColor>{others}</Text>
+          </Box>
+        ) : null}
       </Box>
     </Box>
   )
 }
 
 // The progress block drawn above the context bar: none while no run is shown.
-export const progressRows = (v: RunView | null, els: Els): unknown[] =>
-  v === null ? [] : [block(els, 'progress-steps', v)]
+export const progressRows = (v: RunView | null, els: Els, opts: BlockOpts): unknown[] =>
+  v === null ? [] : [block(els, 'progress-steps', v, opts)]
