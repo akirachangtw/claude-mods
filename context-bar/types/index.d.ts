@@ -196,6 +196,9 @@ export type ProgressState = {
   legacy: { plan: StepProgress; runId: RunId } | null
   diagnostics: Diagnostic[]
   counts: { accepted: number; ignored: number }
+  // The run the band shows, kept a moment before an equal-priority run may
+  // take its place; `held` is the run waiting for that moment.
+  primary?: { runId: RunId; since: number; held?: RunId }
 }
 
 declare module 'claude-code' {
