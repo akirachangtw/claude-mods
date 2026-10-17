@@ -353,6 +353,14 @@ context 類別、配色、compact tick、token 計算、`details` 開合與偏�
 
 **結果**：67 pass / 0 fail；6/6 mutants killed；validate 通過。修正 7 需要再跑一次實機確認，只看 divider。
 
+### P2 結案（2026-10-17）
+
+- **裁決：P2 通過並凍結。** 不再修改分隔線、進度條色彩、小貓或 context 排版。
+- 實機確認：Desktop 分隔線為完整淡灰細線、無 `…`；真實 skill run（`projman` 0/9）下正式進度維持 0%，只有 buffer 隨活動成長。
+- 驗收截圖與錄影只用於本機 Desktop 驗收，存放在 `tmp/`（已 ignore），不納入 Git。
+- 驗證：67 pass / 0 fail；`mutation.mjs` 6/6 killed；`claude plugin validate` 通過。
+- **移至 P3（已知可接受）**：committed = 0% 時，淺色 buffer 是軌道上唯一有顏色的段落，可能被看成進度。
+
 **觀察（不在 P2 範圍）**：主對話的工具呼叫會歸到「最新的 foreground run」，不一定是畫面上顯示的那個 run（0:25～0:32 C 顯示 `⧗ Bash`）。實務上子 run 多半由 subagent 建立、屬於 background，影響有限；記錄待後續評估。
 
 ## 八、未解風險（先列，實作中驗證）
