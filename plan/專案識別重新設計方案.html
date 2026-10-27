@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>專案識別重新設計方案</title>
+<style>
+  :root {
+    --page: #F7F6F2;
+    --ink: #2B2A27;
+    --dim: #8C8A84;
+    --line: #D8D6CF;
+    --band: #EFEEE9;
+    --band-border: #C9C7C0;
+    --track: #8A8985;
+    --claude: #C9603E;
+    --tint: #EDC3AE;
+    --rule: #CFCDC6;
+    --badge: #1F6E2A;
+    --note-bg: #FFFFFF;
+    --chip-bg: #E4E2DB;
+    --mark: #FFF1C2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #161615; --ink: #E8E6E0; --dim: #8F8D86; --line: #34332F;
+      --band: #1F1F1E; --band-border: #44433F; --track: #5C5B57; --rule: #3A3935;
+      --note-bg: #1C1C1B; --chip-bg: #2E2D2A; --mark: #4A4020;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page: #161615; --ink: #E8E6E0; --dim: #8F8D86; --line: #34332F;
+    --band: #1F1F1E; --band-border: #44433F; --track: #5C5B57; --rule: #3A3935;
+    --note-bg: #1C1C1B; --chip-bg: #2E2D2A; --mark: #4A4020;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.6 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
+  header.page { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .5px; }
+  .lead { color: var(--dim); margin: 0; max-width: 720px; }
+  .toggle { display: flex; gap: 4px; background: var(--chip-bg); padding: 4px; border-radius: 8px; }
+  .toggle button {
+    border: 0; background: transparent; color: var(--ink); padding: 6px 12px; border-radius: 6px;
+    font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .toggle button[aria-pressed="true"] { background: var(--band); box-shadow: 0 0 0 1px var(--band-border); }
+
+  .principles { margin: 24px 0 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .principles div { background: var(--note-bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 13.5px; }
+  .principles b { display: block; margin-bottom: 2px; }
+
+  section.option { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--line); }
+  .opt-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .opt-id { font: 600 13px/1 ui-monospace, Consolas, monospace; color: var(--claude); border: 1px solid var(--claude); border-radius: 4px; padding: 3px 6px; }
+  h2 { font-size: 20px; margin: 0; }
+  .rec { font-size: 12px; background: var(--claude); color: #fff; border-radius: 999px; padding: 2px 10px; }
+  .opt-desc { color: var(--dim); margin: 6px 0 16px; max-width: 820px; }
+
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; }
+  @media (max-width: 520px) { .pair { grid-template-columns: 1fr; } }
+  .win-label { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+
+  /* ---- a faithful replica of the context-bar band ---- */
+  .band {
+    background: var(--band); border: 1px solid var(--band-border); border-radius: 10px;
+    padding: 8px 12px 10px; font: 14px/1.5 "Segoe UI", "Microsoft JhengHei", sans-serif; color: var(--ink);
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 26px; }
+  .row .l { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+  .row .r { white-space: nowrap; }
+  .mark { font-size: 11px; }
+  .b { font-weight: 600; }
+  .d { color: var(--dim); }
+  .track { display: flex; align-items: center; height: 26px; }
+  .seg { height: 22px; }
+  .cat { width: 21px; height: 16px; margin: 0 2px; flex: none; }
+  .ctx { display: flex; height: 22px; margin-top: 2px; }
+  .rule { height: 1px; background: var(--rule); margin: 8px 7%; }
+  .badge { background: var(--badge); color: #fff; font-weight: 700; padding: 0 4px; border-radius: 2px; }
+  .chip { font-size: 12px; padding: 0 7px; border-radius: 999px; background: var(--chip-bg); color: var(--ink); line-height: 20px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+  .hl { background: var(--mark); border-radius: 3px; box-shadow: 0 0 0 3px var(--mark); display: inline-flex; align-items: center; gap: 6px; }
+
+  /* sidebar mock for option E */
+  .sidebar { background: var(--band); border: 1px solid var(--band-border); border-radius: 10px; padding: 10px; font-size: 13.5px; }
+  .sidebar .item { padding: 6px 8px; border-radius: 6px; display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
+  .sidebar .item.on { background: var(--chip-bg); }
+
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 14px; font-size: 13.5px; }
+  .meta div { background: var(--note-bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .meta h3 { font-size: 13px; margin: 0 0 4px; color: var(--dim); font-weight: 600; }
+  .meta ul { margin: 0; padding-left: 18px; }
+  .score { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin-top: 10px; color: var(--dim); }
+  .score b { color: var(--ink); }
+
+  table.sum { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }
+  table.sum th, table.sum td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; vertical-align: top; }
+  table.sum th { color: var(--dim); font-weight: 600; font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  footer { margin-top: 40px; color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page">
+    <div>
+      <h1>專案識別：重新設計方案</h1>
+      <p class="lead">project-skin 的整條彩色圖樣帶與 context-bar 的風格不一致而移除。以下方案都改成「融進 context-bar 現有的列」，用最少的點綴讓不同專案的視窗一眼可辨。每個方案都並排兩個專案視窗做比較；<span class="hl">黃底</span>標出和現行 context-bar 不同的地方。</p>
+    </div>
+    <div class="toggle" role="group" aria-label="主題">
+      <button type="button" data-theme-set="light">淺色</button>
+      <button type="button" data-theme-set="dark">深色</button>
+      <button type="button" data-theme-set="auto" aria-pressed="true">跟隨系統</button>
+    </div>
+  </header>
+
+  <div class="principles">
+    <div><b>只用一個點綴</b>每個專案只帶一個顏色或一個名稱，不新增整列色塊。</div>
+    <div><b>沿用既有元素</b>放在 context-bar 已有的列、分隔線或邊框上，不另起一條帶子。</div>
+    <div><b>低對比</b>專案色採低彩度，和 context-bar 的橘色主色、淡灰文字同一個調性。</div>
+    <div><b>不擋進度</b>進度卡片、分隔線、context bar 的位置與高度都不變。</div>
+  </div>
+
+  <div id="options"></div>
+
+  <section class="option">
+    <div class="opt-head"><h2>比較總表</h2></div>
+    <div class="table-wrap">
+      <table class="sum">
+        <thead><tr><th>方案</th><th>改動位置</th><th>多佔空間</th><th>辨識度</th><th>違和風險</th><th>需要動 context-bar</th></tr></thead>
+        <tbody id="sum-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    存放位置：plan/專案識別重新設計方案.html。選定方案後再寫設計計畫，實作前一樣先確認。<br>
+    畫面為示意，比例與顏色取自 context-bar 的實機截圖；實際以 Desktop 實機為準。
+  </footer>
+</main>
+
+<script>
+// Two projects to compare side by side; muted accents in the context-bar register.
+const PROJECTS = [
+  { name: 'SmartCameraApp1', short: 'SmartCA1', path: '…/AndroidProj/SmartCameraApp1', color: '#3F7FB5', run: 'ADV-RESETISO-01', stage: 'AI-0: 錨點復驗', done: '0/7', pct: '0%', ctx: '806k of 1M', ctxPct: '81%' },
+  { name: 'claude-mods', short: 'claudeM', path: '…/DevSources/claude-mods', color: '#8E6BB8', run: 'projman', stage: 'Mission', done: '0/9', pct: '0%', ctx: '304k of 1M', ctxPct: '30%' },
+]
+
+const CAT = '<svg class="cat" viewBox="0 -1 13 10" shape-rendering="crispEdges"><g fill="#B8865B"><rect x="1" y="0" width="1" height="1"/><rect x="4" y="0" width="1" height="1"/><rect x="1" y="1" width="4" height="3"/><rect x="2" y="4" width="9" height="3"/><rect x="11" y="1" width="1" height="4"/><rect x="2" y="7" width="1" height="2"/><rect x="4" y="7" width="1" height="2"/><rect x="8" y="7" width="1" height="2"/><rect x="10" y="7" width="1" height="2"/></g><rect x="3" y="2" width="1" height="1" fill="#2B1D16"/></svg>'
+const CTX_SEGS = [['#C8C6C0', 1], ['#4E4C48', 3], ['#1E8BB5', 2], ['#2E9A4A', 1], ['#C9603E', 1], ['#7A4A10', 1], ['#8279BD', 21], ['var(--track)', 64], ['#7A4A10', 1], ['var(--track)', 2]]
+
+const hl = (html, on) => (on ? `<span class="hl">${html}</span>` : html)
+
+// One band. `o` says which parts differ from today's context-bar.
+function band(p, o = {}) {
+  const border = o.border ? `border-color:${p.color};box-shadow:inset 3px 0 0 ${p.color};` : ''
+  const ctxTitle = o.ctxName
+    ? `<span class="mark" style="color:var(--claude)">◆</span>${hl(`<span class="b" style="background:#2F6FB0;color:#fff;padding:0 2px;border-radius:2px">[${p.short}]</span>`, true)}<span class="b">context</span>`
+    : `<span class="mark" style="color:var(--claude)">◆</span><span class="b">context</span>`
+  const runTitle = o.chip
+    ? `${hl(`<span class="chip" style="box-shadow: inset 2px 0 0 ${p.color}">${p.short}</span>`, true)}<span class="b">${p.run}</span>`
+    : `<span class="b">${p.run}</span>`
+  const ctxRight = o.corner
+    ? `${hl(`<span class="dot" style="background:${p.color}"></span> <span class="d">${p.short}</span>`, true)}<span class="d"> · ${p.ctx} · compacts at 967k </span>`
+    : `<span class="d">${p.ctx} · compacts at 967k </span>`
+  const rule = o.namedRule
+    ? `<div style="display:flex;align-items:center;gap:10px;margin:8px 7%">
+         <div style="flex:1;height:1px;background:var(--rule)"></div>
+         ${hl(`<span class="d" style="font-size:12px"><span class="dot" style="background:${p.color};width:7px;height:7px"></span> ${p.name}</span>`, true)}
+         <div style="flex:1;height:1px;background:var(--rule)"></div></div>`
+    : o.tintRule
+      ? hl(`<div class="rule" style="background:${p.color};opacity:.55"></div>`, true)
+      : '<div class="rule"></div>'
+  return `
+  <div class="band" style="${border}">
+    <div class="row"><div class="l"><span class="mark" style="color:var(--claude)">▶</span>${runTitle}<span class="d">&nbsp;${p.stage}</span></div>
+      <div class="r"><span class="b">${p.done}</span><span class="d">&nbsp; ${p.pct}</span></div></div>
+    <div class="track">${CAT}<div class="seg" style="flex:8;background:var(--tint)"></div><div class="seg" style="flex:92;background:var(--track)"></div></div>
+    <div class="row"><div class="l d">⧗ Bash</div></div>
+    ${rule}
+    <div class="row"><div class="l">${ctxTitle}<span class="d" style="font-size:12px">&nbsp;▸ details</span></div>
+      <div class="r">${ctxRight}<span class="badge">${p.ctxPct}</span></div></div>
+    <div class="ctx">${CTX_SEGS.map(([c, f]) => `<div style="flex:${f};background:${c}"></div>`).join('')}</div>
+  </div>`
+}
+
+function sidebar(active) {
+  return `<div class="sidebar">
+    ${PROJECTS.map((p, i) => `<div class="item ${i === active ? 'on' : ''}">${hl(`<span class="dot" style="background:${p.color}"></span><span class="b">${p.short}</span><span class="d">·</span>`, true)}<span>${i === 0 ? '修正 RESETISO 錨點' : 'context-bar P2 驗收'}</span></div>`).join('')}
+    <div class="item"><span class="d">（其他沒有前綴的舊對話）</span></div>
+  </div>`
+}
+
+const OPTIONS = [
+  {
+    id: 'A', title: 'context 標題帶出專案名（已選定）', rec: true,
+    desc: '把 context 列的「◆ context」改成「◆ [專案名] context」：[專案名] 藍底白字，最多 8 個字元。名稱可用 /project-name 自訂，沒設定時自動縮寫（SmartCameraApp1 → SmartCA1、claude-mods → claudeM；8 格以內不縮）。整個 band 只改這一個位置。細節見 plan/專案名稱標籤設計計畫.md。',
+    view: () => PROJECTS.map(p => band(p, { ctxName: true })),
+    pros: ['完全不多佔空間', '沿用既有 ◆ 記號，風格一致', '專案名直接寫出來，不用記顏色'],
+    cons: ['名稱在 band 下半部，不是最先看到的位置', '要動已凍結的 context-bar'],
+    space: '0 列', recog: '中高', risk: '最低', cb: '是（標題一處）',
+  },
+  {
+    id: 'B', title: '分隔線嵌入專案名',
+    desc: '進度卡片與 context 之間那條分隔線，中央嵌入「● 專案名」。分隔線本來就在，只是變成有標籤的分隔線。',
+    view: () => PROJECTS.map(p => band(p, { namedRule: true })),
+    pros: ['位於 band 正中央，視線自然經過', '分隔線本身維持低對比', '不多佔空間'],
+    cons: ['沒有進度卡片時分隔線不存在，名稱也跟著消失', '要動已凍結的 context-bar'],
+    space: '0 列', recog: '中', risk: '低', cb: '是（分隔線）',
+  },
+  {
+    id: 'C', title: '邊框染上專案色',
+    desc: 'band 的圓角邊框換成專案色，左緣加一條 3px 色條。不加任何文字，只靠顏色辨識。',
+    view: () => PROJECTS.map(p => band(p, { border: true })),
+    pros: ['餘光就看得出差異，辨識最快', '內容完全不變', '不多佔空間'],
+    cons: ['要記得「哪個顏色是哪個專案」', '顏色多時容易混', '色弱使用者較難分辨（你用的是 daltonized 主題）'],
+    space: '0 列', recog: '中（只靠顏色）', risk: '中', cb: '是（邊框）',
+  },
+  {
+    id: 'D', title: '進度標題前加專案標籤',
+    desc: '進度卡片標題最前面加一顆小標籤（chip），左緣帶專案色。只在有進度時出現。',
+    view: () => PROJECTS.map(p => band(p, { chip: true })),
+    pros: ['放在 band 最上方，第一眼就看到', '標籤形狀小、不搶戲'],
+    cons: ['沒有 run 時就看不到', '標題變長，窄欄時 stage 名稱更早被截斷'],
+    space: '0 列', recog: '高（有 run 時）', risk: '低', cb: '是（進度標題）',
+  },
+  {
+    id: 'E', title: '對話標題前綴（不動 band）',
+    desc: '啟動時在 session 標題前加「● 專案名 ·」。band 完全不變，在側邊欄與切換視窗時辨識。',
+    view: () => [sidebar(0), band(PROJECTS[0])],
+    labels: ['側邊欄（對話清單）', '目前視窗的 band：完全不變'],
+    pros: ['context-bar 一行都不用改', '切換對話時最有用', '可以和 A～D 任一方案並用'],
+    cons: ['看著單一視窗時，band 上沒有專案資訊', '只對新開的對話生效'],
+    space: '0 列', recog: '高（在清單裡）', risk: '無', cb: '否（獨立小 mod）',
+  },
+  {
+    id: 'A+E', title: '組合：標題帶專案名 ＋ 對話標題前綴',
+    desc: '視窗裡看 context 標題，切換對話時看側邊欄前綴，兩個位置都用同一個專案色與名稱。',
+    view: () => [band(PROJECTS[0], { ctxName: true }), sidebar(0)],
+    labels: ['視窗內：context 標題', '側邊欄：對話標題前綴'],
+    pros: ['兩種情境都能辨識', '兩處都只是一個小點綴，整體仍克制'],
+    cons: ['要做兩件事：改 context-bar 一處，加一個小 mod'],
+    space: '0 列', recog: '高', risk: '低', cb: '是（標題一處）＋ 小 mod',
+  },
+]
+
+const root = document.getElementById('options')
+root.innerHTML = OPTIONS.map(o => {
+  const views = o.view()
+  const labels = o.labels ?? PROJECTS.map(p => `專案視窗：${p.name}`)
+  return `
+  <section class="option" id="opt-${o.id}">
+    <div class="opt-head"><span class="opt-id">${o.id}</span><h2>${o.title}</h2>${o.rec ? '<span class="rec">建議</span>' : ''}</div>
+    <p class="opt-desc">${o.desc}</p>
+    <div class="pair">${views.map((v, i) => `<div><div class="win-label">${labels[i]}</div>${v}</div>`).join('')}</div>
+    <div class="meta">
+      <div><h3>優點</h3><ul>${o.pros.map(x => `<li>${x}</li>`).join('')}</ul></div>
+      <div><h3>缺點</h3><ul>${o.cons.map(x => `<li>${x}</li>`).join('')}</ul></div>
+    </div>
+    <div class="score"><span>多佔空間：<b>${o.space}</b></span><span>辨識度：<b>${o.recog}</b></span><span>違和風險：<b>${o.risk}</b></span><span>需要動 context-bar：<b>${o.cb}</b></span></div>
+  </section>`
+}).join('')
+
+document.getElementById('sum-body').innerHTML = OPTIONS.map(o => `
+  <tr><td><b>${o.id}</b> ${o.title}${o.rec ? '（建議）' : ''}</td><td>${o.desc.split('。')[0]}</td><td>${o.space}</td><td>${o.recog}</td><td>${o.risk}</td><td>${o.cb}</td></tr>`).join('')
+
+// Theme toggle: light, dark, or follow the system.
+const buttons = document.querySelectorAll('[data-theme-set]')
+const setTheme = t => {
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme')
+  else document.documentElement.setAttribute('data-theme', t)
+  buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themeSet === t)))
+  try { localStorage.setItem('skin-options-theme', t) } catch {}
+}
+buttons.forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themeSet)))
+try { const saved = localStorage.getItem('skin-options-theme'); if (saved) setTheme(saved) } catch {}
+</script>
+</body>
+</html>
