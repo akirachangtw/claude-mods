@@ -19,6 +19,7 @@ import { EMIT_SPEC, EMIT_TOOL, normalizeEmit, outcomeText } from './progress/eve
 import { applyLegacyPlan, currentPlan, hasOpenEmitRun, migrateSteps } from './progress/legacy'
 import { type Action, emptyState, isTerminal, nextDue, reduce } from './progress/reducer'
 import { backgroundCount, diagnosticsText, runView, shownRun } from './progress/view'
+import { cleanName, folderName, labelFor, projectKey, readNames, resolveName } from './project/name'
 
 const snapshot = atom({ plugin: 'context-bar', key: 'snapshot' } as const, null)
 // Why the last refresh produced no full breakdown; shown while there is no snapshot.
@@ -31,6 +32,8 @@ const steps = atom({ plugin: 'context-bar', key: 'steps' } as const, null)
 // adapter's plan and the diagnostics. Its own atom: context never reads it and
 // it never reads context.
 const progress = atom({ plugin: 'context-bar', key: 'progress' } as const, emptyState(), { shape: 'progress-v2' })
+// The session's project and its label on the context header.
+const project = atom({ plugin: 'context-bar', key: 'project' } as const, null)
 
 const FREE_COLOR = 'inactive'
 const TICK_COLOR = 'warning'
@@ -40,6 +43,10 @@ const FREE_BG = 'subtle'
 // a cell, so a full row of them overflows into an ellipsis. Centred, the
 // shorter rule reads as an inset separator.
 const DESKTOP_RULE_SHARE = 0.85
+
+// The project label: white on blue, a block like the usage badge, the same for every project.
+const LABEL_BG = '#2F6FB0'
+const LABEL_FG = '#FFFFFF'
 
 // Delay before measuring the conversation a /clear started.
 const CLEAR_REFRESH_MS = 500
@@ -169,6 +176,16 @@ const registerProgressTool = async ($: EngineInterface) => {
   }
   try {
     await $.command.register({
+      name: 'project-name',
+      description: 'The project label on the context header: set it, or reset, off, on',
+      argumentHint: '[name | reset | off | on]',
+      immediate: true,
+    })
+  } catch {
+    // No command: the automatic label still shows.
+  }
+  try {
+    await $.command.register({
       name: 'progress',
       description: 'Progress runs and diagnostics; "dismiss" hides ended runs',
       argumentHint: '[dismiss]',
@@ -177,6 +194,86 @@ const registerProgressTool = async ($: EngineInterface) => {
   } catch {
     // No command: the band still draws.
   }
+}
+
+// Names by project key, kept between sessions (see ProjectNames).
+const NAMES_KEY = 'projectNames'
+// Where the session's project was last found: /clear starts no session.start.
+let projectPath: string | null = null
+
+const loadNames = async ($: EngineInterface) => {
+  try {
+    return readNames(await $.store.get(NAMES_KEY))
+  } catch {
+    return readNames(undefined)
+  }
+}
+
+// The session's project root (it follows /cd), else the directory it started in.
+const loadProject = async ($: EngineInterface, cwd?: string) => {
+  try {
+    projectPath = await $.session.root()
+  } catch {
+    if (cwd !== undefined) projectPath = cwd
+  }
+  const key = projectPath === null ? null : projectKey(projectPath)
+  if (projectPath === null || key === null) {
+    await update($, project, () => null)
+    return
+  }
+  const before = await loadNames($)
+  const { label, names } = resolveName(before, key, folderName(projectPath))
+  if (names !== before) {
+    try {
+      await $.store.set(NAMES_KEY, names)
+    } catch {
+      // Not saved: the label holds for this session and is made again next time.
+    }
+  }
+  const folder = folderName(projectPath)
+  await update($, project, () => ({ key, folder, label }))
+}
+
+// /project-name [name | reset | off | on]
+const projectCommand = async ($: EngineInterface, args: string): Promise<string> => {
+  const p = await read($, project)
+  if (p === null) return 'No project directory for this session: no label is shown.'
+  const names = await loadNames($)
+  const arg = args.trim()
+  const auto = names.auto[p.key]
+  const without = (list: string[]) => list.filter(k => k !== p.key)
+  let note = ''
+  if (arg === '') {
+    const source = names.off.includes(p.key) ? 'off' : names.custom[p.key] !== undefined ? 'custom' : 'automatic'
+    return [
+      `project   ${p.key}`,
+      `label     ${p.label === null ? '(none)' : `[${p.label}]`} (${source})`,
+      `automatic ${auto === undefined ? '(not made yet)' : `[${auto}]`}`,
+      'usage     /project-name <name> · reset · off · on',
+    ].join('\n')
+  }
+  let next = names
+  if (arg === 'reset') {
+    const { [p.key]: _gone, ...custom } = names.custom
+    next = { ...names, custom, off: without(names.off) }
+  } else if (arg === 'off') {
+    next = { ...names, off: [...without(names.off), p.key] }
+  } else if (arg === 'on') {
+    next = { ...names, off: without(names.off) }
+  } else {
+    const { name, cut } = cleanName(arg)
+    if (name === '') return 'A name needs at least one character other than [ and ].'
+    if (cut) note = ' (cut to 8 cells)'
+    next = { ...names, custom: { ...names.custom, [p.key]: name }, off: without(names.off) }
+  }
+  const { label, names: kept } = resolveName(next, p.key, p.folder)
+  try {
+    await $.store.set(NAMES_KEY, kept)
+  } catch {
+    note += ' (not saved: it holds for this session only)'
+  }
+  await update($, project, () => ({ ...p, label }))
+  return `${label === null ? 'Project label off.' : `Project label: [${label}]`}${note}`
 }
 
 // The host's time; a host without a clock (some test kits) falls back to the environment's.
@@ -320,6 +417,7 @@ export const register: Register = on => {
     const r = await next(e)
     await registerProgressTool($)
     await loadPrefs($)
+    await loadProject($, e.cwd)
     // A reload keeps the runs but loses the calls that were in flight.
     await act($, { kind: 'reload', at: await now($) })
     await refresh($)
@@ -348,6 +446,7 @@ export const register: Register = on => {
           await clearProgress($)
           await registerProgressTool($)
           await loadPrefs($)
+          await loadProject($)
           await refresh($)
         })()
       })
@@ -364,6 +463,8 @@ export const register: Register = on => {
     await refresh($)
     return r
   })
+
+  on('command.run', { command: 'project-name' }, async ($, e) => ({ text: await projectCommand($, e.args) }))
 
   // The progress tools are the mod's own and harmless: never a permission prompt.
   on('tool.check', { tool: ['mcp__context-bar__progress', 'mcp__context-bar__progress_emit'] }, ($, e, next) =>
@@ -514,16 +615,37 @@ export const register: Register = on => {
         </Box>
       ) : null
 
+    // ◆ [name] context: the project label sits between the mark and the title,
+    // each its own Text in a row so the label keeps its block colours.
+    const p = await read($, project)
+    const label =
+      p !== null && p.label !== null ? (
+        <Text key="project-label" bold color={LABEL_FG} backgroundColor={LABEL_BG}>
+          {`[${labelFor(p.label, e.props.bodyColumns)}]`}
+        </Text>
+      ) : null
+    const title = (tail: string) => [
+      <Text key="mark" color="claude">
+        ◆{' '}
+      </Text>,
+      label,
+      label !== null ? <Text key="label-gap"> </Text> : null,
+      <Text key="name" bold>
+        {tail}
+      </Text>,
+    ]
+
     if (s === null) {
       const why = await read($, diag)
       return (
         <Box key="context-bar" flexDirection="column">
           {progressBox}
-          <Text>
-            <Text color="claude">◆ </Text>
-            <Text bold>context </Text>
-            <Text dimColor>{why ?? 'waiting for first measurement…'}</Text>
-          </Text>
+          <Box key="waiting" flexDirection="row">
+            {title('context ')}
+            <Text dimColor wrap="truncate-end">
+              {why ?? 'waiting for first measurement…'}
+            </Text>
+          </Box>
         </Box>
       )
     }
@@ -536,10 +658,9 @@ export const register: Register = on => {
     const header = (
       <Box key="header" flexDirection="row" justifyContent="space-between">
         <Box key="title" flexDirection="row" columnGap={1}>
-          <Text>
-            <Text color="claude">◆ </Text>
-            <Text bold>context</Text>
-          </Text>
+          <Box key="title-text" flexDirection="row">
+            {title('context')}
+          </Box>
           <Button
             key="details-toggle"
             label={open ? '▾ details' : '▸ details'}
