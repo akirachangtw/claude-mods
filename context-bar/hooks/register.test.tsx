@@ -562,3 +562,92 @@ test('a ticket row survives silent turns (paused), unlike a skill row', async ($
   expect((await ui.find({ key: 'progress-steps' }))?.text).toContain('ABC-05')
   await ui.unmount()
 })
+
+// ---- project label ---------------------------------------------------------
+
+const startIn = async ($: any, on: any, cwd: string, saved: Record<string, unknown> = {}) => {
+  mock.store(on, saved)
+  on('session.start', () => ({ cwd }) as never)
+  on('session.usage', () => ({ value: USAGE }) as never)
+  on('ui.render', engineBand)
+  await $.session.start({ cwd } as never)
+}
+
+// The title row's text, and its label Text (Text keys are not kept: the one with a background).
+const headerText = async ($: any, props: unknown = BAND) => {
+  const ui = await $.ui.mount({ plugin: 'context-bar', surface: 'desktop', component: 'AbovePrompt', props })
+  const row = ((await ui.find({ key: 'title-text' })) ?? (await ui.find({ key: 'waiting' }))) as any
+  await ui.unmount()
+  const label = (row?.children ?? []).find((c: any) => c?.props?.backgroundColor !== undefined)
+  return { text: row?.text as string | undefined, label }
+}
+
+test('the context header carries the project label, white on blue, before the title', async ($, on) => {
+  await startIn($, on, 'D:\\DevSources\\AndroidProj\\SmartCameraApp1')
+  const { text, label } = await headerText($)
+  expect(text).toContain('◆ [SmartCA1] context')
+  expect(label?.props.backgroundColor).toBe('#2F6FB0')
+  expect(label?.props.color).toBe('#FFFFFF')
+})
+
+test('before the first measurement the waiting line carries the label too', async ($, on) => {
+  mock.store(on, {})
+  on('session.start', () => ({ cwd: 'D:\\x\\claude-mods' }) as never)
+  on('session.usage', () => {
+    throw new Error('not yet')
+  })
+  on('ui.render', engineBand)
+  await $.session.start({ cwd: 'D:\\x\\claude-mods' } as never)
+  const { text } = await headerText($)
+  expect(text).toContain('◆ [claudeM] context')
+})
+
+test('no project directory: the header is the plain ◆ context', async ($, on) => {
+  await startIn($, on, '.')
+  const { text, label } = await headerText($)
+  expect(text).toContain('◆ context')
+  expect(label).toBeUndefined()
+})
+
+test('a narrow band shortens the label', async ($, on) => {
+  await startIn($, on, 'D:\\DevSources\\AndroidProj\\SmartCameraApp1')
+  const { text } = await headerText($, { ...(BAND as object), bodyColumns: 50 })
+  expect(text).toContain('[SmartC] context')
+})
+
+test('a second project with the same abbreviation is numbered; the first keeps its label', async ($, on) => {
+  const saved = { projectNames: { auto: { 'd:/a/smartcameraapp1': 'SmartCA1' }, custom: {}, off: [] } }
+  await startIn($, on, 'D:\\b\\SmartCameraApp1', saved)
+  expect((await headerText($)).text).toContain('[SmartCA2]')
+})
+
+test('/project-name sets, resets, turns off and on the label, and keeps it', async ($, on) => {
+  const store: Record<string, unknown> = {}
+  on('store.get', ($: any, e: any) => ({ value: store[e.key] }) as never)
+  on('store.set', ($: any, e: any) => ((store[e.key] = e.value), { value: undefined }) as never)
+  on('session.start', () => ({ cwd: 'D:\\DevSources\\AndroidProj\\SmartCameraApp1' }) as never)
+  on('session.usage', () => ({ value: USAGE }) as never)
+  on('ui.render', engineBand)
+  await $.session.start({ cwd: 'D:\\DevSources\\AndroidProj\\SmartCameraApp1' } as never)
+  const run = async (args: string) => (await $.command.run({ command: 'project-name', args } as never)).text
+
+  expect(await run('Cam')).toContain('[Cam]')
+  expect((await headerText($)).text).toContain('◆ [Cam] context')
+  expect(store.projectNames).toMatchObject({ custom: { 'd:/devsources/androidproj/smartcameraapp1': 'Cam' } })
+
+  expect(await run('[CameraCoach]')).toContain('cut to 8')
+  expect((await headerText($)).text).toContain('[CameraCo]')
+
+  expect(await run('off')).toContain('off')
+  const off = await headerText($)
+  expect(off.label).toBeUndefined()
+  expect(off.text).toContain('◆ context')
+
+  await run('on')
+  expect((await headerText($)).text).toContain('[CameraCo]')
+  await run('reset')
+  expect((await headerText($)).text).toContain('[SmartCA1]')
+  const info = await run('')
+  expect(info).toContain('[SmartCA1] (automatic)')
+  expect(await run('[]')).toContain('at least one character')
+})
