@@ -1,10 +1,10 @@
-// Mutation check for the progress reducer: removes one guard at a time, runs
+// Mutation check for the progress reducer and the project label: removes one guard at a time, runs
 // `claude plugin test`, and expects the suite to fail. A mutant the tests let
 // through means that guard is untested.
 //
 //   node context-bar/scripts/mutation.mjs
 //
-// The source file is restored after every mutant, also on error.
+// Each source file is restored after every mutant, also on error.
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -13,8 +13,10 @@ import { fileURLToPath } from 'node:url'
 
 const pluginDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const reducer = join(pluginDir, 'hooks', 'progress', 'reducer.ts')
+const names = join(pluginDir, 'hooks', 'project', 'name.ts')
 
-// Each mutant is a list of source lines to find and the lines to put instead.
+// Each mutant is a list of source lines to find in `file` (the reducer unless
+// named) and the lines to put instead.
 const MUTANTS = [
   {
     name: 'sequence guard removed',
@@ -50,10 +52,22 @@ const MUTANTS = [
       '      r.liveness.currentActivity = action.name',
     ],
   },
+  {
+    name: 'project label: a taken abbreviation is reused',
+    file: names,
+    from: ['  if (!taken.has(base)) return base'],
+    to: ['  return base'],
+  },
+  {
+    name: 'project label: the custom name no longer wins',
+    file: names,
+    from: ['  if (custom !== undefined) return { label: custom, names }'],
+    to: [],
+  },
 ]
 
-const original = readFileSync(reducer, 'utf8')
-const eol = original.includes(String.fromCharCode(13, 10)) ? String.fromCharCode(13, 10) : String.fromCharCode(10)
+const originals = new Map([reducer, names].map(f => [f, readFileSync(f, 'utf8')]))
+const restore = () => originals.forEach((text, f) => writeFileSync(f, text))
 
 const runTests = () => {
   try {
@@ -68,16 +82,19 @@ let survived = 0
 try {
   if (!runTests()) throw new Error('the unmutated suite fails; fix it first')
   for (const m of MUTANTS) {
+    const file = m.file ?? reducer
+    const original = originals.get(file)
+    const eol = original.includes(String.fromCharCode(13, 10)) ? String.fromCharCode(13, 10) : String.fromCharCode(10)
     const from = m.from.join(eol)
     if (!original.includes(from)) throw new Error(`mutant "${m.name}": source text not found`)
-    writeFileSync(reducer, original.replace(from, m.to.join(eol)))
+    writeFileSync(file, original.replace(from, m.to.join(eol)))
     const passed = runTests()
-    writeFileSync(reducer, original)
+    restore()
     console.log(`${passed ? 'SURVIVED' : 'killed  '}  ${m.name}`)
     if (passed) survived++
   }
 } finally {
-  writeFileSync(reducer, original)
+  restore()
 }
 console.log(survived === 0 ? `all ${MUTANTS.length} mutants killed` : `${survived} mutant(s) survived`)
 process.exit(survived === 0 ? 0 : 1)
