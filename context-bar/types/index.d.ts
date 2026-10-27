@@ -201,6 +201,19 @@ export type ProgressState = {
   primary?: { runId: RunId; since: number; held?: RunId }
 }
 
+// ---- project label --------------------------------------------------------
+
+// Kept in the plugin's store, by project key: names made from folders (fixed once
+// given), names the person set, and projects that show none.
+export type ProjectNames = {
+  auto: Record<string, string>
+  custom: Record<string, string>
+  off: string[]
+}
+
+// The session's project and the label its context header shows (null: none).
+export type ProjectLabel = { key: string; folder: string; label: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     'context-bar': {
@@ -212,6 +225,7 @@ declare module 'claude-code' {
       // Kept under the atom's shape tag (Shaped<ProgressState>, spelled out: this
       // contract may import nothing). A new tag reads an older value as absent.
       progress: { shape: string; value: ProgressState }
+      project: ProjectLabel | null
     }
   }
 }
