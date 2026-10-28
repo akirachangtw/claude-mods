@@ -177,8 +177,8 @@ const registerProgressTool = async ($: EngineInterface) => {
   try {
     await $.command.register({
       name: 'project-name',
-      description: 'The project label on the context header: set it, or reset, off, on',
-      argumentHint: '[name | reset | off | on]',
+      description: 'The project label on the context header: set it, or reset, off, on, reload',
+      argumentHint: '[name | reset | off | on | reload]',
       immediate: true,
     })
   } catch {
@@ -209,20 +209,45 @@ const loadNames = async ($: EngineInterface) => {
   }
 }
 
-// The session's project root (it follows /cd), else the directory it started in.
+// How far up a .git is looked for.
+const ROOT_DEPTH = 32
+
+// The repository holding `path` (a .git folder or file), else `path` itself: a
+// session that moves into a subfolder stays the same project.
+const repoRoot = async ($: EngineInterface, path: string): Promise<string> => {
+  let dir = path.replace(/[\\/]+$/, '')
+  for (let i = 0; i < ROOT_DEPTH && dir !== ''; i++) {
+    try {
+      await $.fs.stat(`${dir}/.git`)
+      return dir
+    } catch {
+      // Not here: one folder up.
+    }
+    const cut = Math.max(dir.lastIndexOf('/'), dir.lastIndexOf('\\'))
+    if (cut <= 0 || /^[A-Za-z]:$/.test(dir)) break
+    dir = dir.slice(0, cut)
+  }
+  return path
+}
+
+// The session's project: the repository around its root (which follows /cd),
+// else around the directory it started in. Names are read afresh every time.
 const loadProject = async ($: EngineInterface, cwd?: string) => {
   try {
     projectPath = await $.session.root()
   } catch {
     if (cwd !== undefined) projectPath = cwd
   }
-  const key = projectPath === null ? null : projectKey(projectPath)
-  if (projectPath === null || key === null) {
+  const start = projectPath === null ? null : projectKey(projectPath)
+  if (projectPath === null || start === null) {
     await update($, project, () => null)
     return
   }
+  const root = await repoRoot($, projectPath)
+  const key = projectKey(root) ?? start
+  const folder = folderName(root)
   const before = await loadNames($)
-  const { label, names } = resolveName(before, key, folderName(projectPath))
+  const { label, names } = resolveName(before, key, folder)
   if (names !== before) {
     try {
       await $.store.set(NAMES_KEY, names)
@@ -230,12 +255,21 @@ const loadProject = async ($: EngineInterface, cwd?: string) => {
       // Not saved: the label holds for this session and is made again next time.
     }
   }
-  const folder = folderName(projectPath)
-  await update($, project, () => ({ key, folder, label }))
+  const shown = await read($, project)
+  if (shown?.key !== key || shown.folder !== folder || shown.label !== label) {
+    await update($, project, () => ({ key, folder, label }))
+  }
 }
 
-// /project-name [name | reset | off | on]
+// /project-name [name | reset | off | on | reload]
 const projectCommand = async ($: EngineInterface, args: string): Promise<string> => {
+  // Names are read at session start only: another session's change shows here
+  // after a reload.
+  if (args.trim() === 'reload') {
+    await loadProject($)
+    const r = await read($, project)
+    return r === null || r.label === null ? 'Project label reloaded: none shown.' : `Project label reloaded: [${r.label}]`
+  }
   const p = await read($, project)
   if (p === null) return 'No project directory for this session: no label is shown.'
   const names = await loadNames($)
@@ -249,7 +283,7 @@ const projectCommand = async ($: EngineInterface, args: string): Promise<string>
       `project   ${p.key}`,
       `label     ${p.label === null ? '(none)' : `[${p.label}]`} (${source})`,
       `automatic ${auto === undefined ? '(not made yet)' : `[${auto}]`}`,
-      'usage     /project-name <name> · reset · off · on',
+      'usage     /project-name <name> · reset · off · on · reload',
     ].join('\n')
   }
   let next = names
