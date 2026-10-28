@@ -651,3 +651,36 @@ test('/project-name sets, resets, turns off and on the label, and keeps it', asy
   expect(info).toContain('[SmartCA1] (automatic)')
   expect(await run('[]')).toContain('at least one character')
 })
+
+test('a session in a subfolder of the repository is the same project', async ($, on) => {
+  on('fs.stat', ($: any, e: any) => {
+    if (e.path.split('\\').join('/').toLowerCase() === 'd:/x/claude-mods/.git') {
+      return { value: { kind: 'dir', size: 0, mtimeMs: 1, isLink: false } }
+    }
+    throw new Error(`ENOENT ${e.path}`)
+  })
+  await startIn($, on, 'D:\\x\\claude-mods\\context-bar\\hooks')
+  expect((await headerText($)).text).toContain('◆ [claudeM] context')
+})
+
+test('a name set in another session shows here after /project-name reload', async ($, on) => {
+  const store: Record<string, unknown> = {}
+  on('store.get', ($: any, e: any) => ({ value: store[e.key] }) as never)
+  on('store.set', ($: any, e: any) => ((store[e.key] = e.value), { value: undefined }) as never)
+  on('session.start', () => ({ cwd: 'D:\\x\\claude-mods' }) as never)
+  on('session.usage', () => ({ value: USAGE }) as never)
+  on('ui.render', engineBand)
+  await $.session.start({ cwd: 'D:\\x\\claude-mods' } as never)
+  expect((await headerText($)).text).toContain('[claudeM]')
+  // Another session writes the custom name into the shared store.
+  store.projectNames = { ...(store.projectNames as object), custom: { 'd:/x/claude-mods': 'ClaudMOD' } }
+  // Not read on its own: the band keeps the name it had until a reload.
+  expect((await headerText($)).text).toContain('[claudeM]')
+  const run = async (args: string) => (await $.command.run({ command: 'project-name', args } as never)).text
+  expect(await run('reload')).toContain('[ClaudMOD]')
+  expect((await headerText($)).text).toContain('[ClaudMOD]')
+  // And a reset there comes back here at the next reload.
+  store.projectNames = { ...(store.projectNames as object), custom: {} }
+  await run('reload')
+  expect((await headerText($)).text).toContain('[claudeM]')
+})
