@@ -6,7 +6,7 @@ import { applyLegacyPlan, migrateSteps } from './progress/legacy'
 import { TICKET_AUTHOR } from './progress/manifests'
 import { type Action, FADE_MS, STALE_MS, emptyState, nextDue, reduce, stageCeiling } from './progress/reducer'
 import { PRIMARY_HOLD_MS, primaryRun, runView, shownRun } from './progress/view'
-import { textCells } from './layout'
+import { NARROW_TEXT_SIZE, textCells } from './layout'
 import { displayWidth } from './text'
 
 // ---- helpers -----------------------------------------------------------------
@@ -834,7 +834,8 @@ test('narrow desktop: small text, two thin bars, no cat, status row, divider, to
   expect(header.text).not.toContain('582k')
   const head = (await ui.find({ key: 'progress-steps-head' })) as any
   expect(head.text).toContain('0/7')
-  expect(JSON.stringify(head)).toContain('"size":"footnote"')
+  expect(JSON.stringify(head)).toContain(`"size":"${NARROW_TEXT_SIZE}"`)
+  expect(JSON.stringify(header)).toContain(`"size":"${NARROW_TEXT_SIZE}"`)
   await ui.unmount()
 })
 
