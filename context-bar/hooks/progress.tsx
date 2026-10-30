@@ -1,7 +1,7 @@
 import type { LivenessStatus, StepProgress } from '../types'
 import { EMIT_TOOL } from './progress/events'
 import type { RunView } from './progress/view'
-import { fitText, fitTitle } from './layout'
+import { NARROW_TEXT_SIZE, fitText, fitTitle } from './layout'
 import { displayWidth } from './text'
 import { THIN_BARS, THIN_BAR_PX, thinBarSvg } from './thinbar'
 
@@ -285,7 +285,7 @@ const block = ({ Box, Text, Svg }: Els, key: string, v: RunView, opts: BlockOpts
   const [mark, color] = v.warning && v.status === 'completed' ? ['!', 'warning'] : MARK[v.status]
   const isDim = DIM.has(v.status)
   const isCompact = opts.columns < COMPACT_COLUMNS
-  const size = opts.narrow ? { size: 'footnote' } : {}
+  const size = opts.narrow ? { size: NARROW_TEXT_SIZE } : {}
   const committed = Math.max(0, Math.min(100, v.committed))
   const buffer = Math.max(committed, Math.min(100, v.buffer))
   const bufferColor = color === 'claude' ? BUFFER_TINT : 'subtle'

@@ -20,7 +20,7 @@ import { applyLegacyPlan, currentPlan, hasOpenEmitRun, migrateSteps } from './pr
 import { type Action, emptyState, isTerminal, nextDue, reduce } from './progress/reducer'
 import { backgroundCount, diagnosticsText, runView, shownRun } from './progress/view'
 import { cleanName, folderName, labelFor, projectKey, readNames, resolveName } from './project/name'
-import { fitHeader, fitText, isNarrow, textCells } from './layout'
+import { NARROW_TEXT_SIZE, fitHeader, fitText, isNarrow, textCells } from './layout'
 import { displayWidth } from './text'
 import { THIN_BARS, THIN_BAR_PX, isLightTheme, thinBarSvg } from './thinbar'
 
@@ -655,7 +655,7 @@ export const register: Register = on => {
     // divider, token count or details. Wide or narrow, every row is one line.
     const narrow = isNarrow(e.props.bodyColumns)
     const cells = textCells(e.props.bodyColumns, e.surface)
-    const small = narrow ? { size: 'footnote' } : {}
+    const small = narrow ? { size: NARROW_TEXT_SIZE } : {}
     const thinSvg = narrow && THIN_BARS ? mascotSvg : undefined
 
     const state = await read($, progress)

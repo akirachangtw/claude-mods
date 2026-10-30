@@ -13,6 +13,10 @@ export const NARROW_COLUMNS = 60
 export const DESKTOP_TEXT_SHARE = 0.85
 export const DESKTOP_SMALL_TEXT_SHARE = 1.0
 
+// The narrow band's text size, the smallest step: footnote drew about as large
+// as body text on the desktop. The terminal has one size and ignores it.
+export const NARROW_TEXT_SIZE = 'caption'
+
 // The band's round border and one cell of padding on each side.
 const BAND_FRAME = 4
 
