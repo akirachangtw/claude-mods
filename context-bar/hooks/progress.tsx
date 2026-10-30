@@ -1,6 +1,9 @@
 import type { LivenessStatus, StepProgress } from '../types'
 import { EMIT_TOOL } from './progress/events'
 import type { RunView } from './progress/view'
+import { fitText, fitTitle } from './layout'
+import { displayWidth } from './text'
+import { THIN_BARS, THIN_BAR_PX, thinBarSvg } from './thinbar'
 
 // Pure helpers for the progress rows; everything that calls $, and the state atoms
 // the engine scans for, live in register.tsx.
@@ -268,24 +271,88 @@ const STATUS_TEXT: Record<LivenessStatus, string> = {
 // desktop band is about 95 cells, so it keeps the full words.
 export const COMPACT_COLUMNS = 80
 
-export type BlockOpts = { background: number; columns: number }
+// `columns` is the band's width; `cells` the text a row may take (layout.ts);
+// `narrow` the small-text band with thin bars; `light` picks the bar colours.
+export type BlockOpts = { background: number; columns: number; cells: number; narrow: boolean; light: boolean }
 
-// One progress block: a title line (status, label, stage; count and committed
-// percent on the right), a track whose solid fill is committed and whose lighter
-// extension is the buffer, the cat at the committed end, and a liveness line
-// with the other runs summed up on its right.
+// One progress block, wide: a title line (status, label, stage; count and
+// committed percent on the right), a track whose solid fill is committed and
+// whose lighter extension is the buffer, the cat at the committed end, and a
+// liveness line with the other runs summed up on its right. Narrow: the title
+// in small text (no stage, `+N` on its right) over a thin bar, nothing else.
+// Every row is cut to one line before it is drawn.
 const block = ({ Box, Text, Svg }: Els, key: string, v: RunView, opts: BlockOpts) => {
   const [mark, color] = v.warning && v.status === 'completed' ? ['!', 'warning'] : MARK[v.status]
   const isDim = DIM.has(v.status)
   const isCompact = opts.columns < COMPACT_COLUMNS
+  const size = opts.narrow ? { size: 'footnote' } : {}
+  const committed = Math.max(0, Math.min(100, v.committed))
+  const buffer = Math.max(committed, Math.min(100, v.buffer))
+  const bufferColor = color === 'claude' ? BUFFER_TINT : 'subtle'
+  const others = opts.background > 0 ? (isCompact ? `+${opts.background}` : `+${opts.background} background`) : null
+  const count = `${v.done}/${v.total}`
+  const right = `${count}  ${v.percent}%` + (opts.narrow && others !== null ? `  ${others}` : '')
+  const detail = v.detail !== null && v.status !== 'completed' ? v.detail : null
+  const fit = fitTitle(v.label, detail, right, opts.cells)
+
+  const head = (
+    <Box key={`${key}-head`} flexDirection="row" columnGap={2}>
+      <Box key={`${key}-title`} width={0} flexGrow={1}>
+        <Text wrap="truncate-end" dimColor={isDim} {...size}>
+          <Text color={color}>{`${mark} `}</Text>
+          <Text bold>{fit.label}</Text>
+          {fit.detail !== null ? <Text dimColor>{`   ${fit.detail}`}</Text> : null}
+        </Text>
+      </Box>
+      <Text dimColor={isDim} {...size}>
+        <Text bold>{count}</Text>
+        <Text dimColor>{`  ${v.percent}%`}</Text>
+        {opts.narrow && others !== null ? <Text dimColor>{`  ${others}`}</Text> : null}
+      </Text>
+    </Box>
+  )
+
+  if (opts.narrow) {
+    // No cat and no status row. A desktop draws the bar thin; the terminal's
+    // one-row blocks are as thin as it goes.
+    const bar =
+      Svg !== undefined && THIN_BARS ? (
+        <Svg
+          key={`${key}-thin`}
+          source={thinBarSvg(
+            [
+              { weight: committed, color },
+              { weight: buffer - committed, color: bufferColor },
+              { weight: 100 - buffer, color: 'subtle' },
+            ],
+            opts.light,
+          )}
+          alt={`${v.percent}% done`}
+          height={THIN_BAR_PX}
+        />
+      ) : (
+        <Box key={`${key}-track`} flexDirection="row" height={1}>
+          {committed > 0 ? <Box key={`${key}-committed`} width={0} flexGrow={committed} height={1} backgroundColor={color} /> : null}
+          {buffer > committed ? (
+            <Box key={`${key}-buffer`} width={0} flexGrow={buffer - committed} height={1} backgroundColor={bufferColor} />
+          ) : null}
+          {buffer < 100 ? <Box key={`${key}-rest`} width={0} flexGrow={100 - buffer} height={1} backgroundColor="subtle" /> : null}
+        </Box>
+      )
+    return (
+      <Box key={key} flexDirection="column">
+        {head}
+        {bar}
+      </Box>
+    )
+  }
+
   const mascot =
     Svg !== undefined ? (
       <Svg key={`${key}-mascot`} source={catSvg(v.status)} alt={`cat ${POSE[v.status]}`} width={CAT_W} height={CAT_H} isInteractive />
     ) : (
       <Text color="claude">{CAT_GLYPH[POSE[v.status]]}</Text>
     )
-  const committed = Math.max(0, Math.min(100, v.committed))
-  const buffer = Math.max(committed, Math.min(100, v.buffer))
   const state =
     v.error !== null
       ? v.error
@@ -295,22 +362,10 @@ const block = ({ Box, Text, Svg }: Els, key: string, v: RunView, opts: BlockOpts
           ? 'done · stages left open'
           : STATUS_TEXT[v.status]
   const live = [v.rgr, state].filter(x => x !== null).join(' · ')
-  const others = opts.background > 0 ? (isCompact ? `+${opts.background}` : `+${opts.background} background`) : null
+  const liveRoom = opts.cells - (others !== null ? displayWidth(others) + 2 : 0)
   return (
     <Box key={key} flexDirection="column">
-      <Box key={`${key}-head`} flexDirection="row" columnGap={2}>
-        <Box key={`${key}-title`} width={0} flexGrow={1}>
-          <Text wrap="truncate-end" dimColor={isDim}>
-            <Text color={color}>{`${mark} `}</Text>
-            <Text bold>{v.label}</Text>
-            {v.detail !== null && v.status !== 'completed' ? <Text dimColor>{`   ${v.detail}`}</Text> : null}
-          </Text>
-        </Box>
-        <Text dimColor={isDim}>
-          <Text bold>{`${v.done}/${v.total}`}</Text>
-          <Text dimColor>{`  ${v.percent}%`}</Text>
-        </Text>
-      </Box>
+      {head}
       {/* The desktop track takes the cat's height (no fixed one-row height for an
           Svg to spill out of onto the rows around it); the bar stays one row,
           centred on it. The terminal's cat is text, one row like the bar. */}
@@ -318,14 +373,14 @@ const block = ({ Box, Text, Svg }: Els, key: string, v: RunView, opts: BlockOpts
         {committed > 0 ? <Box key={`${key}-committed`} width={0} flexGrow={committed} height={1} backgroundColor={color} /> : null}
         {mascot}
         {buffer > committed ? (
-          <Box key={`${key}-buffer`} width={0} flexGrow={buffer - committed} height={1} backgroundColor={color === 'claude' ? BUFFER_TINT : 'subtle'} />
+          <Box key={`${key}-buffer`} width={0} flexGrow={buffer - committed} height={1} backgroundColor={bufferColor} />
         ) : null}
         {buffer < 100 ? <Box key={`${key}-rest`} width={0} flexGrow={100 - buffer} height={1} backgroundColor="subtle" /> : null}
       </Box>
       <Box key={`${key}-live`} flexDirection="row" columnGap={2}>
         <Box key={`${key}-state`} width={0} flexGrow={1}>
           <Text wrap="truncate-end" dimColor>
-            {live}
+            {fitText(live, liveRoom)}
           </Text>
         </Box>
         {others !== null ? (
