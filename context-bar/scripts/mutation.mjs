@@ -1,4 +1,4 @@
-// Mutation check for the progress reducer and the project label: removes one guard at a time, runs
+// Mutation check for the progress reducer, the project label and the band layout: removes one guard at a time, runs
 // `claude plugin test`, and expects the suite to fail. A mutant the tests let
 // through means that guard is untested.
 //
@@ -14,6 +14,9 @@ import { fileURLToPath } from 'node:url'
 const pluginDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const reducer = join(pluginDir, 'hooks', 'progress', 'reducer.ts')
 const names = join(pluginDir, 'hooks', 'project', 'name.ts')
+const layout = join(pluginDir, 'hooks', 'layout.ts')
+const thinbar = join(pluginDir, 'hooks', 'thinbar.ts')
+const progressView = join(pluginDir, 'hooks', 'progress.tsx')
 
 // Each mutant is a list of source lines to find in `file` (the reducer unless
 // named) and the lines to put instead.
@@ -64,9 +67,27 @@ const MUTANTS = [
     from: ['  if (custom !== undefined) return { label: custom, names }'],
     to: [],
   },
+  {
+    name: 'narrow band: the status row is drawn',
+    file: progressView,
+    from: ['  if (opts.narrow) {'],
+    to: ['  if (false) {'],
+  },
+  {
+    name: 'context header: the summary is never cut',
+    file: layout,
+    from: ['  for (const t of tries) if (displayWidth(t.summary) + (t.details ? DETAILS_CELLS : 0) <= room) return t'],
+    to: ['  return tries[0]!'],
+  },
+  {
+    name: 'thin bar: the markup has no width of its own',
+    file: thinbar,
+    from: ['    `<svg xmlns="http://www.w3.org/2000/svg" width="${MARKUP_WIDTH}" height="${THIN_BAR_PX}" ` +'],
+    to: ['    `<svg xmlns="http://www.w3.org/2000/svg" height="${THIN_BAR_PX}" ` +'],
+  },
 ]
 
-const originals = new Map([reducer, names].map(f => [f, readFileSync(f, 'utf8')]))
+const originals = new Map([reducer, names, layout, thinbar, progressView].map(f => [f, readFileSync(f, 'utf8')]))
 const restore = () => originals.forEach((text, f) => writeFileSync(f, text))
 
 const runTests = () => {
