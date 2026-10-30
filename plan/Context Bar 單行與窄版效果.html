@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>單行與窄版效果</title>
+<style>
+  :root {
+    --page: #F7F6F2; --ink: #2B2A27; --dim: #8C8A84; --line: #D8D6CF;
+    --band: #EFEEE9; --band-border: #C9C7C0; --track: #8A8985; --claude: #C9603E;
+    --tint: #EDC3AE; --rule: #CFCDC6; --warn: #8A6A12; --ok: #1F6E2A;
+    --note-bg: #FFFFFF; --chip-bg: #E4E2DB; --mark: #FFF1C2; --chat: #FFFFFF; --bad: #C0392B;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #161615; --ink: #E8E6E0; --dim: #8F8D86; --line: #34332F;
+      --band: #1F1F1E; --band-border: #44433F; --track: #5C5B57; --rule: #3A3935;
+      --note-bg: #1C1C1B; --chip-bg: #2E2D2A; --mark: #4A4020; --chat: #1A1A19; --bad: #E0705F;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page: #161615; --ink: #E8E6E0; --dim: #8F8D86; --line: #34332F;
+    --band: #1F1F1E; --band-border: #44433F; --track: #5C5B57; --rule: #3A3935;
+    --note-bg: #1C1C1B; --chip-bg: #2E2D2A; --mark: #4A4020; --chat: #1A1A19; --bad: #E0705F;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.6 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; }
+  main { max-width: 1160px; margin: 0 auto; padding: 32px 16px 64px; }
+  header.page { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .lead { color: var(--dim); margin: 0; max-width: 780px; }
+  .toggle { display: flex; gap: 4px; background: var(--chip-bg); padding: 4px; border-radius: 8px; }
+  .toggle button { border: 0; background: transparent; color: var(--ink); padding: 6px 12px; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; }
+  .toggle button[aria-pressed="true"] { background: var(--band); box-shadow: 0 0 0 1px var(--band-border); }
+
+  .controls { margin: 20px 0 0; display: flex; gap: 18px; flex-wrap: wrap; align-items: center; font-size: 14px; background: var(--note-bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .controls label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .controls .seg { display: inline-flex; background: var(--chip-bg); border-radius: 8px; padding: 3px; gap: 2px; }
+  .controls .seg button { border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+  .controls .seg button[aria-pressed="true"] { background: var(--band); box-shadow: 0 0 0 1px var(--band-border); }
+
+  section { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .id { font: 600 13px/1 ui-monospace, Consolas, monospace; color: var(--claude); border: 1px solid var(--claude); border-radius: 4px; padding: 3px 6px; }
+  h2 { font-size: 20px; margin: 0; }
+  .pill { font-size: 12px; border-radius: 999px; padding: 2px 10px; }
+  .pill.plan { background: var(--claude); color: #fff; }
+  .pill.alt { border: 1px solid var(--line); color: var(--dim); }
+  .desc { color: var(--dim); margin: 6px 0 14px; max-width: 880px; }
+
+  .grid { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  .win { flex: none; max-width: 100%; }
+  .win-label { font-size: 12px; color: var(--dim); margin-bottom: 6px; display: flex; justify-content: space-between; gap: 12px; }
+  .win-label b { color: var(--ink); font-weight: 600; }
+  .rows { font: 600 12px/1 ui-monospace, Consolas, monospace; color: var(--claude); }
+
+  /* ---- band replica: every row is one line ---- */
+  .band { background: var(--band); border: 1px solid var(--band-border); border-radius: 10px; padding: 8px 12px 10px; font: 14px/1.5 "Segoe UI", "Microsoft JhengHei", sans-serif; }
+  .r1 { display: flex; align-items: center; gap: 10px; height: 24px; white-space: nowrap; }
+  .r1 .l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .r1 .r { flex: none; }
+  .b { font-weight: 600; }
+  .d { color: var(--dim); }
+  .dimrow { opacity: .55; }
+  .mk { color: var(--claude); font-size: 11px; margin-right: 4px; }
+  .label { background: #2F6FB0; color: #fff; font-weight: 600; padding: 0 2px; margin-right: 6px; }
+  .badge { color: #fff; font-weight: 700; padding: 0 4px; border-radius: 2px; background: var(--warn); }
+  .track { display: flex; align-items: center; height: 24px; }
+  .track.tall { height: 26px; }
+  .track .seg { height: 20px; }
+  .cat { width: 21px; height: 16px; margin: 0 2px; flex: none; }
+  .rule { height: 1px; background: var(--rule); margin: 6px 7%; }
+  .ctx { display: flex; height: 20px; margin-top: 2px; }
+  .glyph { font: 15px/24px ui-monospace, Consolas, monospace; height: 24px; overflow: hidden; white-space: nowrap; letter-spacing: -1px; }
+  .svgbar { height: 24px; display: flex; align-items: center; }
+  .fillrow { position: relative; }
+  .fillrow .fill { position: absolute; left: -4px; top: 1px; bottom: 1px; border-radius: 3px; background: var(--claude); opacity: .28; }
+  .fillrow .buf { position: absolute; top: 1px; bottom: 1px; border-radius: 0 3px 3px 0; background: var(--tint); opacity: .35; }
+  .fillrow .r1 { position: relative; }
+  .band.small { font-size: 12px; }
+  .band.small .r1 { height: 20px; }
+  .thin { height: 14px; display: flex; align-items: center; }
+  .thin svg { display: block; }
+  .hl { background: var(--mark); border-radius: 3px; box-shadow: 0 0 0 3px var(--mark); }
+  .gone { font-size: 12px; color: var(--dim); margin-top: 8px; }
+  .gone s { color: var(--bad); }
+
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 14px; font-size: 13.5px; }
+  .meta div { background: var(--note-bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .meta h3 { font-size: 13px; margin: 0 0 4px; color: var(--dim); font-weight: 600; }
+  .meta ul { margin: 0; padding-left: 18px; }
+  table.sum { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+  table.sum th, table.sum td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; vertical-align: top; }
+  table.sum th { color: var(--dim); font-weight: 600; font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  footer { margin-top: 40px; color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page">
+    <div>
+      <h1>Context Bar：單行與窄版效果</h1>
+      <p class="lead">依 <code>plan/Context Bar 單行與窄版設計計畫.md</code> 畫出的效果。前兩節是計畫本身（寬版單行、窄版極簡），後三節是「細進度條」的三種做法比較。上方可以切換 run 狀態與標題長短，看各列怎麼依序省略、始終維持一行；<span class="hl">黃底</span>是和 P2 現況不同的地方。</p>
+    </div>
+    <div class="toggle" role="group" aria-label="主題">
+      <button type="button" data-theme-set="light">淺色</button>
+      <button type="button" data-theme-set="dark">深色</button>
+      <button type="button" data-theme-set="auto" aria-pressed="true">跟隨系統</button>
+    </div>
+  </header>
+
+  <div class="controls">
+    <span>狀態：</span>
+    <span class="seg" id="status">
+      <button type="button" data-v="running" aria-pressed="true">▶ 執行中</button>
+      <button type="button" data-v="waiting">⏸ 等你回應</button>
+      <button type="button" data-v="done">✓ 完成</button>
+    </span>
+    <span>進度：</span>
+    <span class="seg" id="pct">
+      <button type="button" data-v="0">0/6</button>
+      <button type="button" data-v="3" aria-pressed="true">3/6</button>
+      <button type="button" data-v="5">5/6</button>
+    </span>
+    <label><input type="checkbox" id="long" checked> 長標題</label>
+    <label><input type="checkbox" id="bg"> 另有 2 個背景 run</label>
+  </div>
+
+  <div id="out"></div>
+
+  <section>
+    <div class="head"><h2>細進度條三種做法比較（窄版）</h2></div>
+    <div class="table-wrap">
+      <table class="sum">
+        <thead><tr><th>做法</th><th>窄版總列數</th><th>看起來</th><th>Desktop 風險</th><th>Terminal</th></tr></thead>
+        <tbody>
+          <tr><td><b>已選定：③ Svg 半高細條＋小字</b></td><td>約 3 列</td><td>兩條都是細條</td><td>中：markup 給寬度、由所在空間限寬，需實機驗證</td><td>退回一列高色塊</td></tr>
+          <tr><td><b>退回版：一列高色塊、不畫小貓</b></td><td>4 列</td><td>和 context 色條一樣粗</td><td>低（色塊已在 P2 驗證）</td><td>相同</td></tr>
+          <tr><td><b>① 細線字元 <code>━</code></b></td><td>4 列</td><td>細線，較輕</td><td>中：字比格子寬，排滿會換行，要打 85 折或截斷</td><td>可用（一格一字）</td></tr>
+          <tr><td><b>② 進度畫在標題底色</b></td><td><b>3 列</b></td><td>標題前段淡淡上色</td><td>中：字寬不一，底色比例是約略值；文字疊色可讀性要實機看</td><td>可用（背景色）</td></tr>
+          <tr><td><b>③ Svg 半高細條（有設寬度）</b></td><td>4 列（列較矮）</td><td>真正的細條</td><td>高：寬度要與該列剛好對齊，P2 曾畫不出來</td><td>不支援，退回色塊</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    存放位置：plan/Context Bar 單行與窄版效果.html。畫面為示意：寬度以 Desktop 實機截圖估算（寬版約 900px、窄版約 460px），列數以一行字高計。實際以 Desktop 實機為準。
+  </footer>
+</main>
+
+<script>
+const CAT = '<svg class="cat" viewBox="0 -1 13 10" shape-rendering="crispEdges"><g fill="#B8865B"><rect x="1" y="0" width="1" height="1"/><rect x="4" y="0" width="1" height="1"/><rect x="1" y="1" width="4" height="3"/><rect x="2" y="4" width="9" height="3"/><rect x="11" y="1" width="1" height="4"/><rect x="2" y="7" width="1" height="2"/><rect x="4" y="7" width="1" height="2"/><rect x="8" y="7" width="1" height="2"/><rect x="10" y="7" width="1" height="2"/></g><rect x="3" y="2" width="1" height="1" fill="#2B1D16"/></svg>'
+const SEGS = [['#C8C6C0', 1], ['#4E4C48', 3], ['#1E8BB5', 2], ['#2E9A4A', 1], ['#C9603E', 1], ['#7A4A10', 1], ['#8279BD', 18], ['var(--track)', 70], ['#7A4A10', 1], ['var(--track)', 2]]
+const hl = (html, on = true) => (on ? `<span class="hl">${html}</span>` : html)
+const S = { status: 'running', done: 3, long: true, bg: false }
+
+const MARKS = { running: ['▶', 'var(--claude)'], waiting: ['⏸', 'var(--dim)'], done: ['✓', 'var(--ok)'] }
+const LIVE = { running: '⧗ Bash', waiting: 'waiting for you', done: 'done' }
+
+// Display width: CJK counts two.
+const W = s => [...s].reduce((n, c) => n + (/[⺀-￯]/.test(c) ? 2 : 1), 0)
+const clip = (s, w) => {
+  if (W(s) <= w) return s
+  let out = ''
+  for (const c of s) { if (W(out + c) > w - 1) break; out += c }
+  return out + '…'
+}
+
+function view() {
+  const title = S.long ? 'ADV-CONSTRSRC-01 BLOCKED 回流（無模型啟動）' : 'ticket-author'
+  const stage = S.long ? 'N6 通知語義查核' : 'Mission'
+  const committed = Math.round((S.done / 6) * 100)
+  const buffer = S.status === 'running' ? Math.min(100, committed + 8) : committed
+  return { title, stage, committed, buffer, count: `${S.status === 'done' ? 6 : S.done}/6`, pct: `${S.status === 'done' ? 100 : committed}%` }
+}
+
+// Cells a row can hold: a desktop draws text wider than a cell, so it keeps 85%.
+const cellsFor = px => Math.floor((px - 26) / 8.2 * 0.85)
+
+// Context header right side, dropping parts in the plan's order until it fits.
+function ctxRight(cells, narrow) {
+  const left = W('◆ [Cuesho] context') + (narrow ? 0 : W(' ▸ details'))
+  const badge = 5
+  const tries = narrow ? [''] : ['582k of 1M · compacts at 967k', '582k of 1M', '582k/1M', '']
+  for (const t of tries) if (left + W(t) + badge + 2 <= cells) return { text: t, details: !narrow }
+  return { text: '', details: false }
+}
+
+function titleRow(v, cells, narrow, extra = '') {
+  const [mk, color] = MARKS[S.status]
+  const right = `${v.count}  ${v.pct}` + (narrow && S.bg ? '  +2' : '')
+  const room = cells - W(right) - 4
+  let main = v.title
+  let st = narrow ? '' : v.stage
+  if (W(main) + 3 + W(st) > room) st = ''
+  if (st === '' && W(main) > room) main = clip(main, room)
+  const changed = narrow || st !== v.stage || main !== v.title
+  const left = `<span style="color:${color}">${mk}</span> <span class="b">${main}</span>${st ? ` <span class="d">&nbsp;${st}</span>` : ''}`
+  return `<div class="r1 ${S.status === 'waiting' ? 'dimrow' : ''}">
+    <div class="l">${changed ? hl(left) : left}</div>
+    <div class="r"><span class="b">${v.count}</span> <span class="d">&nbsp;${v.pct}</span>${narrow && S.bg ? hl(' <span class="d">+2</span>') : ''}</div>${extra}</div>`
+}
+
+function blockTrack(v, withCat) {
+  return `<div class="track ${withCat ? 'tall' : ''}">
+    ${v.committed > 0 ? `<div class="seg" style="flex:${v.committed};background:var(--claude)"></div>` : ''}
+    ${withCat ? CAT : ''}
+    ${v.buffer > v.committed ? `<div class="seg" style="flex:${v.buffer - v.committed};background:var(--tint)"></div>` : ''}
+    ${v.buffer < 100 ? `<div class="seg" style="flex:${100 - v.buffer};background:var(--track)"></div>` : ''}
+  </div>`
+}
+
+function ctxRows(cells, narrow) {
+  const { text, details } = ctxRight(cells, narrow)
+  const full = !narrow && text === '582k of 1M · compacts at 967k'
+  const right = `${text ? `<span class="d">${text}</span> ` : ''}<span class="badge">58%</span>`
+  return `<div class="r1"><div class="l"><span class="mk">◆</span><span class="label">[Cuesho]</span><span class="b">context</span>${details ? ' <span class="d" style="font-size:.85em">&nbsp;▸ details</span>' : ''}</div>
+    <div class="r">${full ? right : hl(right)}</div></div>
+    <div class="ctx">${SEGS.map(([c, f]) => `<div style="flex:${f};background:${c}"></div>`).join('')}</div>`
+}
+
+// Wide: P2 layout, every row cut to one line.
+function wide(px) {
+  const v = view()
+  const cells = cellsFor(px)
+  const others = S.bg ? `<div class="r"><span class="d">${px < 640 ? '+2' : '+2 background'}</span></div>` : ''
+  return `<div class="band" style="width:${px}px">
+    ${titleRow(v, cells, false)}
+    ${blockTrack(v, true)}
+    <div class="r1"><div class="l d">${LIVE[S.status]}</div>${others}</div>
+    <div class="rule"></div>
+    ${ctxRows(cells, false)}
+  </div>`
+}
+
+// Narrow, by bar style: block (plan), glyph (①), fill (②), svg (③).
+function narrow(px, style) {
+  const v = view()
+  const cells = cellsFor(px)
+  let progress = ''
+  if (style === 'block') progress = titleRow(v, cells, true) + hl(blockTrack(v, false))
+  if (style === 'glyph') {
+    const n = Math.floor(cells * 1.1)
+    const c = Math.round((v.committed / 100) * n), b = Math.round((v.buffer / 100) * n)
+    progress = titleRow(v, cells, true) + hl(`<div class="glyph"><span style="color:var(--claude)">${'━'.repeat(c)}</span><span style="color:var(--tint)">${'━'.repeat(b - c)}</span><span style="color:var(--track)">${'─'.repeat(Math.max(0, n - b))}</span></div>`)
+  }
+  if (style === 'fill') {
+    progress = `<div class="fillrow">${hl(`<div class="fill" style="width:calc(${v.committed}% + 4px)"></div><div class="buf" style="left:${v.committed}%;width:${v.buffer - v.committed}%"></div>`)}${titleRow(v, cells, true)}</div>`
+  }
+  if (style === 'svg') {
+    const w = px - 26
+    const c = (v.committed / 100) * w, b = (v.buffer / 100) * w
+    progress = titleRow(v, cells, true) + hl(`<div class="svgbar"><svg width="${w}" height="8" viewBox="0 0 ${w} 8"><rect width="${w}" height="8" rx="4" fill="var(--track)"/><rect width="${b}" height="8" rx="4" fill="var(--tint)"/><rect width="${c}" height="8" rx="4" fill="var(--claude)"/></svg></div>`)
+  }
+  if (style === 'final') {
+    const w = px - 26
+    const thin = segs => `<div class="thin"><svg width="${w}" height="8" viewBox="0 0 100 8" preserveAspectRatio="none">${segs}</svg></div>`
+    let x = 0
+    const seg = (f, c) => { const r = `<rect x="${x}" y="0" width="${f}" height="8" fill="${c}"/>`; x += f; return r }
+    const pBar = seg(v.committed, '#C9603E') + seg(v.buffer - v.committed, '#EDC3AE') + seg(100 - v.buffer, 'var(--track)')
+    x = 0
+    const total = SEGS.reduce((n, [, f]) => n + f, 0)
+    const cBar = SEGS.map(([c, f]) => seg((f / total) * 100, c)).join('')
+    const small = Math.floor(cells / 0.85 * 1.0 * 14 / 12)
+    return `<div class="band small" style="width:${px}px">${hl(titleRow(v, small, true) + thin(pBar))}${ctxRowsThin(small, thin(cBar))}</div>`
+  }
+  return `<div class="band" style="width:${px}px">${progress}${ctxRows(cells, true)}</div>`
+}
+
+function ctxRowsThin(cells, bar) {
+  return hl(`<div class="r1"><div class="l"><span class="mk">◆</span><span class="label">[Cuesho]</span><span class="b">context</span></div><div class="r"><span class="badge">58%</span></div></div>${bar}`)
+}
+
+
+function render() {
+  const sections = [
+    {
+      id: '計畫 1', title: '寬版：P2 外觀，每列一律單行', pill: ['plan', '計畫內容'],
+      desc: '外觀和 P2 凍結時相同。放不下時依序省略：context 列先拿掉 compacts at → ▸ details → 縮成 582k/1M → 拿掉 token 數，徽章永遠保留；進度標題先拿掉 stage，再把名稱截短加「…」，0/6 0% 永遠保留。三種寬度看省略順序。',
+      wins: [['單一視窗', 900, wide(900), 6], ['兩欄並列', 640, wide(640), 6], ['剛好 60 欄', 520, wide(520), 6]],
+    },
+    {
+      id: '計畫 2', title: '窄版（已選定）：小字、半高細條、無小貓', pill: ['plan', '已選定'],
+      desc: '依示意圖：文字小一級（Desktop 的 footnote），進度條與 context 色條都是半高細條（Svg，高 8px、撐滿整列），不畫小貓。拿掉狀態列、分隔線、▸ details 與 token 數；狀態看標題前的記號，等你回應時整列變暗。另有背景 run 時，標題右側加 +2。字變小後同樣寬度能放更多字，標題截得更少。',
+      wins: [['四欄並列', 460, narrow(460, 'final'), '約 3'], ['更窄', 340, narrow(340, 'final'), '約 3']],
+      gone: '窄版拿掉：<s>小貓</s>、<s>waiting for you 狀態列</s>、<s>分隔線</s>、<s>▸ details</s>、<s>582k of 1M · compacts at 967k</s>',
+    },
+    {
+      id: '①', title: '細線字元：用 ━ 畫進度', pill: ['alt', '細進度條做法'],
+      desc: '不用 Svg，改用 ━ 字元上色畫成一條細線。看起來較輕，但仍佔一整行，不省高度。Desktop 的字比格子寬，排滿會換行，需要打 85 折或截斷（P2 分隔線遇過同樣問題）。',
+      wins: [['四欄並列', 460, narrow(460, 'glyph'), 4]],
+    },
+    {
+      id: '退回', title: '細條畫不出來時的退回版', pill: ['alt', '保險'],
+      desc: '若實機驗收時 Svg 細條仍畫不出來或寬度不對，Desktop 窄版退回一列高色塊、不畫小貓，其他窄版規則不變。Terminal 窄版一律是這個樣子（Terminal 沒有 Svg 與小字）。',
+      wins: [['四欄並列', 460, narrow(460, 'block'), 4]],
+    },
+    {
+      id: '②', title: '進度畫在標題列的底色上', pill: ['alt', '細進度條做法'],
+      desc: '不另畫進度條：標題列前段依完成比例加上淡淡的底色（實色為已完成、更淡的為 buffer）。真正少一列，窄版只要 3 列。切換上方的進度 0/6、3/6、5/6 看底色長度。',
+      wins: [['四欄並列', 460, narrow(460, 'fill'), 3], ['更窄', 340, narrow(340, 'fill'), 3]],
+    },
+    {
+      id: '③', title: 'Svg 半高細條（明確設定寬度）', pill: ['alt', '細進度條做法'],
+      desc: '用 Svg 畫一條約半行高的圓角細條，並明確設定寬度（P2 分隔線畫不出來是因為沒設寬度）。視覺最細，但寬度要和該列對得剛好，需實機驗證；Terminal 不支援 Svg，會退回色塊。',
+      wins: [['四欄並列', 460, narrow(460, 'svg'), 4]],
+    },
+  ]
+  document.getElementById('out').innerHTML = sections.map(s => `
+    <section>
+      <div class="head"><span class="id">${s.id}</span><h2>${s.title}</h2><span class="pill ${s.pill[0]}">${s.pill[1]}</span></div>
+      <p class="desc">${s.desc}</p>
+      <div class="grid">${s.wins.map(([label, px, html, rows]) => `
+        <div class="win" style="width:${px}px"><div class="win-label"><span><b>${label}</b>：約 ${px}px</span><span class="rows">${rows} 列</span></div>${html}</div>`).join('')}
+      </div>
+      ${s.gone ? `<div class="gone">${s.gone}</div>` : ''}
+    </section>`).join('')
+}
+
+const seg = (id, key, cast = x => x) => document.querySelectorAll(`#${id} button`).forEach(b => b.addEventListener('click', () => {
+  S[key] = cast(b.dataset.v)
+  document.querySelectorAll(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', String(x === b)))
+  render()
+}))
+seg('status', 'status')
+seg('pct', 'done', Number)
+document.getElementById('long').addEventListener('change', e => { S.long = e.target.checked; render() })
+document.getElementById('bg').addEventListener('change', e => { S.bg = e.target.checked; render() })
+render()
+
+const buttons = document.querySelectorAll('[data-theme-set]')
+const setTheme = t => {
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme')
+  else document.documentElement.setAttribute('data-theme', t)
+  buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themeSet === t)))
+  try { localStorage.setItem('oneline-theme', t) } catch {}
+}
+buttons.forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themeSet)))
+try { const saved = localStorage.getItem('oneline-theme'); if (saved) setTheme(saved) } catch {}
+</script>
+</body>
+</html>

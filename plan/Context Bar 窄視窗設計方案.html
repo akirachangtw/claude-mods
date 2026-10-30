@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context Bar 窄視窗方案</title>
+<style>
+  :root {
+    --page: #F7F6F2; --ink: #2B2A27; --dim: #8C8A84; --line: #D8D6CF;
+    --band: #EFEEE9; --band-border: #C9C7C0; --track: #8A8985; --claude: #C9603E;
+    --tint: #EDC3AE; --rule: #CFCDC6; --badge: #1F6E2A; --warn: #8A6A12;
+    --note-bg: #FFFFFF; --chip-bg: #E4E2DB; --mark: #FFF1C2; --chat: #FFFFFF; --bad: #C0392B;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #161615; --ink: #E8E6E0; --dim: #8F8D86; --line: #34332F;
+      --band: #1F1F1E; --band-border: #44433F; --track: #5C5B57; --rule: #3A3935;
+      --note-bg: #1C1C1B; --chip-bg: #2E2D2A; --mark: #4A4020; --chat: #1A1A19; --bad: #E0705F;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page: #161615; --ink: #E8E6E0; --dim: #8F8D86; --line: #34332F;
+    --band: #1F1F1E; --band-border: #44433F; --track: #5C5B57; --rule: #3A3935;
+    --note-bg: #1C1C1B; --chip-bg: #2E2D2A; --mark: #4A4020; --chat: #1A1A19; --bad: #E0705F;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.6 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
+  header.page { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .lead { color: var(--dim); margin: 0; max-width: 760px; }
+  .toggle { display: flex; gap: 4px; background: var(--chip-bg); padding: 4px; border-radius: 8px; }
+  .toggle button { border: 0; background: transparent; color: var(--ink); padding: 6px 12px; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; }
+  .toggle button[aria-pressed="true"] { background: var(--band); box-shadow: 0 0 0 1px var(--band-border); }
+
+  .facts { margin: 24px 0 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .facts div { background: var(--note-bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 13.5px; }
+  .facts b { display: block; margin-bottom: 2px; }
+
+  section.option { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--line); }
+  .opt-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .opt-id { font: 600 13px/1 ui-monospace, Consolas, monospace; color: var(--claude); border: 1px solid var(--claude); border-radius: 4px; padding: 3px 6px; }
+  h2 { font-size: 20px; margin: 0; }
+  .rec { font-size: 12px; background: var(--claude); color: #fff; border-radius: 999px; padding: 2px 10px; }
+  .tag { font-size: 12px; border: 1px solid var(--line); color: var(--dim); border-radius: 999px; padding: 1px 9px; }
+  .opt-desc { color: var(--dim); margin: 6px 0 16px; max-width: 860px; }
+
+  .pair { display: flex; gap: 20px; flex-wrap: wrap; }
+  .win { width: 460px; max-width: 100%; }
+  .win-label { font-size: 12px; color: var(--dim); margin-bottom: 6px; display: flex; justify-content: space-between; }
+  .win-label b { color: var(--ink); font-weight: 600; }
+  .chat { background: var(--chat); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; height: 120px; color: var(--dim); font-size: 13px; overflow: hidden; margin-bottom: 8px; }
+  .chat p { margin: 0 0 6px; }
+
+  /* ---- context-bar band replica ---- */
+  .band { background: var(--band); border: 1px solid var(--band-border); border-radius: 10px; padding: 8px 12px 10px; font: 14px/1.5 "Segoe UI", "Microsoft JhengHei", sans-serif; }
+  .band.small { font-size: 12px; }
+  .row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-height: 24px; }
+  .row .l { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+  .row .r { text-align: right; flex: none; max-width: 52%; }
+  .one .l, .one .r { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-wrap: nowrap; }
+  .one .l { flex: 1; }
+  .one .l .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .one .r { max-width: none; }
+  .b { font-weight: 600; }
+  .d { color: var(--dim); }
+  .mk { color: var(--claude); font-size: 11px; }
+  .label { background: #2F6FB0; color: #fff; font-weight: 600; padding: 0 2px; }
+  .badge { background: var(--badge); color: #fff; font-weight: 700; padding: 0 4px; border-radius: 2px; }
+  .badge.w { background: var(--warn); }
+  .track { display: flex; align-items: center; height: 24px; }
+  .track .seg { height: 20px; }
+  .track.thin { height: 12px; }
+  .track.thin .seg { height: 6px; }
+  .cat { width: 21px; height: 16px; margin-right: 2px; flex: none; }
+  .cat.mini { width: 11px; height: 8px; }
+  .rule { height: 1px; background: var(--rule); margin: 6px 7%; }
+  .ctx { display: flex; height: 20px; margin-top: 2px; }
+  .ctx.thin { height: 6px; margin-top: 4px; }
+  .hl { background: var(--mark); border-radius: 3px; box-shadow: 0 0 0 3px var(--mark); }
+  .cut { outline: 2px dashed var(--bad); outline-offset: 2px; border-radius: 4px; }
+
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 14px; font-size: 13.5px; }
+  .meta div { background: var(--note-bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .meta h3 { font-size: 13px; margin: 0 0 4px; color: var(--dim); font-weight: 600; }
+  .meta ul { margin: 0; padding-left: 18px; }
+  .score { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin-top: 10px; color: var(--dim); }
+  .score b { color: var(--ink); }
+  table.sum { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }
+  table.sum th, table.sum td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; vertical-align: top; }
+  table.sum th { color: var(--dim); font-weight: 600; font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  footer { margin-top: 40px; color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page">
+    <div>
+      <h1>Context Bar：窄視窗方案</h1>
+      <p class="lead">四個對話並排時，每個視窗只剩約 460px（不到 60 欄）。context 列右側的「225k of 1M · compacts at 967k」與進度標題會折成 2～3 行，整個 band 變高、擋住對話。以下每個方案都用同樣的窄視窗，左邊是現況，右邊是改後；<span class="hl">黃底</span>標出改動的地方。</p>
+    </div>
+    <div class="toggle" role="group" aria-label="主題">
+      <button type="button" data-theme-set="light">淺色</button>
+      <button type="button" data-theme-set="dark">深色</button>
+      <button type="button" data-theme-set="auto" aria-pressed="true">跟隨系統</button>
+    </div>
+  </header>
+
+  <div class="facts">
+    <div><b>字型可以變小（只限 Desktop）</b>mod 的 <code>Text</code> 有 <code>size</code>（caption / footnote / body…），Desktop 會換成較小字級；Terminal 只有一種字級，會忽略它。</div>
+    <div><b>不換行可以保證</b><code>Text</code> 的 <code>wrap="truncate-end"</code> 會在一行內截斷加「…」；改用較短的文字，就不需要截斷。</div>
+    <div><b>進度條高度受小貓牽制</b>進度條那一列會長到小貓的高度（21×16）。進度條本身是色塊，高度以「一列」為單位，要做半高得靠 Svg，P2 時 Svg 在 Desktop 有寬度問題，需要實機驗證。</div>
+    <div><b>要動已凍結的 P2</b>以下方案都會改到 P2 凍結的排版，只在窄視窗時生效；寬視窗維持現狀不變。</div>
+  </div>
+
+  <div id="options"></div>
+
+  <section class="option">
+    <div class="opt-head"><h2>比較總表</h2></div>
+    <div class="table-wrap">
+      <table class="sum">
+        <thead><tr><th>方案</th><th>做法</th><th>窄視窗 band 高度</th><th>Terminal</th><th>風險</th></tr></thead>
+        <tbody id="sum-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    存放位置：plan/Context Bar 窄視窗設計方案.html。畫面為示意，取自 2026-10-30 四欄並列截圖；高度以「列」估算，實際以 Desktop 實機為準。<br>
+    選定後先寫設計計畫，確認後才實作。
+  </footer>
+</main>
+
+<script>
+const CAT = cls => `<svg class="cat ${cls ?? ''}" viewBox="0 -1 13 10" shape-rendering="crispEdges"><g fill="#B8865B"><rect x="1" y="0" width="1" height="1"/><rect x="4" y="0" width="1" height="1"/><rect x="1" y="1" width="4" height="3"/><rect x="2" y="4" width="9" height="3"/><rect x="11" y="1" width="1" height="4"/><rect x="2" y="7" width="1" height="2"/><rect x="4" y="7" width="1" height="2"/><rect x="8" y="7" width="1" height="2"/><rect x="10" y="7" width="1" height="2"/></g><rect x="3" y="2" width="1" height="1" fill="#2B1D16"/></svg>`
+const SEGS = [['#C8C6C0', 1], ['#4E4C48', 3], ['#1E8BB5', 2], ['#2E9A4A', 1], ['#C9603E', 1], ['#7A4A10', 1], ['#8279BD', 18], ['var(--track)', 70], ['#7A4A10', 1], ['var(--track)', 2]]
+const hl = (html, on) => (on ? `<span class="hl">${html}</span>` : html)
+const chat = `<div class="chat"><p>提交方式：每個提交都用 git commit -o -- &lt;pathspec&gt;，沒有互相夾帶。</p><p>票檔狀態：2841dd5 的訊息已註明票仍是 REVIEW，close 審查卡在 AC5 等你裁決。</p><p>沒有 push：目前本地領先 origin…</p></div>`
+
+// One narrow band. `o` picks what the option changes.
+function band(o = {}) {
+  const title = 'ADV-CONSTRSRC-01 BLOCKED 回流（無模型啟動）'
+  const stage = 'N6 通知語義查核'
+  const one = o.oneLine
+  const head = one
+    ? `<div class="row one"><div class="l">${hl(`<span class="t"><span class="d">‖</span> <span class="b">${title}</span> <span class="d">${stage}</span></span>`, o.mark)}</div><div class="r"><span class="b">0/6</span> <span class="d">0%</span></div></div>`
+    : `<div class="row"><div class="l"><span class="d">‖</span><span class="b">${title}</span><span class="d">${stage}</span></div><div class="r"><span class="b">0/6</span> <span class="d">0%</span></div></div>`
+  const track = o.thin
+    ? hl(`<div class="track thin">${CAT('mini')}<div class="seg" style="flex:3;background:var(--tint)"></div><div class="seg" style="flex:97;background:var(--track)"></div></div>`, true)
+    : `<div class="track">${CAT()}<div class="seg" style="flex:3;background:var(--tint)"></div><div class="seg" style="flex:97;background:var(--track)"></div></div>`
+  const live = `<div class="row"><div class="l d">waiting for you</div></div>`
+  const right = o.short
+    ? hl(`<span class="d">582k/1M</span> <span class="badge w">58%</span>`, true)
+    : o.badgeOnly
+      ? hl(`<span class="badge w">58%</span>`, true)
+      : `<span class="d">582k of 1M · compacts at 967k</span> <span class="badge w">58%</span>`
+  const details = o.noDetails ? '' : `<span class="d" style="font-size:.85em">▸ details</span>`
+  const ctxRow = one
+    ? `<div class="row one"><div class="l"><span class="mk">◆</span><span class="label">[Cuesho]</span><span class="b">context</span>${details}</div><div class="r">${right}</div></div>`
+    : `<div class="row"><div class="l"><span class="mk">◆</span><span class="label">[Cuesho]</span><span class="b">context</span>${details}</div><div class="r">${right}</div></div>`
+  const ctx = `<div class="ctx ${o.thin ? 'thin' : ''}">${SEGS.map(([c, f]) => `<div style="flex:${f};background:${c}"></div>`).join('')}</div>`
+  if (o.merged) {
+    return `<div class="band">
+      ${hl(`<div class="row one"><div class="l"><span class="t"><span class="d">‖</span> <span class="b">${title}</span></span></div><div class="r"><span class="b">0/6</span> <span class="d">0%</span></div></div>
+      <div class="track thin">${CAT('mini')}<div class="seg" style="flex:3;background:var(--tint)"></div><div class="seg" style="flex:97;background:var(--track)"></div></div>
+      <div class="row one" style="margin-top:4px"><div class="l"><span class="mk">◆</span><span class="label">[Cuesho]</span><span class="b">context</span></div><div class="r"><span class="badge w">58%</span></div></div>`, true)}
+      <div class="ctx thin">${SEGS.map(([c, f]) => `<div style="flex:${f};background:${c}"></div>`).join('')}</div>
+    </div>`
+  }
+  return `<div class="band ${o.small ? 'small' : ''}">${o.small ? '<span class="hl" style="font-size:11px;padding:0 4px">全部文字 footnote 字級</span>' : ''}${head}${track}${live}<div class="rule"></div>${ctxRow}${ctx}</div>`
+}
+
+const NOW = () => band({})
+const OPTIONS = [
+  {
+    id: 'A', title: '窄視窗精簡文字，一律單行', rec: true, tags: ['Desktop', 'Terminal'],
+    desc: '不到 60 欄時：context 右側改成「582k/1M 58%」（拿掉 compacts at），進度標題與 context 列都固定一行，太長以「…」截斷。字級與高度都不動。',
+    view: () => band({ short: true, oneLine: true, mark: true }),
+    rows: '約 6 列（現況約 9 列）', term: '有效', risk: '低',
+    pros: ['Terminal 與 Desktop 一體適用', '只改文字與換行規則，外觀和寬視窗一致', '保證不換行：band 高度在窄視窗下固定'],
+    cons: ['看不到 compacts at 的門檻（展開 details 仍可看）', '很長的 run 標題後段會被截掉'],
+  },
+  {
+    id: 'B', title: '窄視窗縮小字級', tags: ['只限 Desktop'],
+    desc: '不到 60 欄時，band 所有文字改用 footnote 字級，同樣的字數占更少寬度，大多數情況不再換行。Terminal 沒有字級，會忽略。',
+    view: () => band({ small: true }),
+    rows: '約 7 列，每列較矮', term: '無效（需搭配 A）', risk: '中',
+    pros: ['資訊完全不刪減', '每一列都變矮，整體高度下降'],
+    cons: ['Terminal 不支援，仍需 A 當後備', '字小較難讀；四欄並列時距離螢幕本來就遠', '字更小時仍可能換行，不能保證單行'],
+  },
+  {
+    id: 'C', title: '細進度條', tags: ['Desktop', '需實機驗證'],
+    desc: '進度條與 context 色條改成約一半高度；小貓縮小到 11×8，不再撐高進度列。Desktop 色塊最小是一列高，要做半高得改用 Svg，P2 時 Svg 有寬度歸零的問題，要先實機試。',
+    view: () => band({ thin: true }),
+    rows: '約 8 列（省下約 1 列）', term: '無效（Terminal 一格就是一列）', risk: '高',
+    pros: ['兩條色條都變細，視覺更輕', '文字資訊不刪減'],
+    cons: ['省下的高度有限：主要的增高來自文字換行', 'Svg 在 Desktop 的寬度問題未解，可能整條畫不出來', '小貓縮小後動作較難辨識'],
+  },
+  {
+    id: 'D', title: '極簡模式：窄到一定程度只留重點', tags: ['Desktop', 'Terminal'],
+    desc: '不到 50 欄時更進一步：進度只留「標題 + 0/6 0%」一行和細條，拿掉狀態列與分隔線；context 只留「◆ [名稱] context 58%」和細色條。',
+    view: () => band({ merged: true }),
+    rows: '約 4 列', term: '部分有效（細條除外）', risk: '中',
+    pros: ['最省空間', '仍保留最重要的三件事：哪個 run、進度、context 用量'],
+    cons: ['看不到「waiting for you」等狀態文字', '兩種窄度規則（60、50 欄）要多測一組', '細條部分同 C，需要實機驗證'],
+  },
+  {
+    id: 'A+B', title: '建議組合：精簡文字 + 縮小字級', tags: ['Desktop', 'Terminal'],
+    desc: 'A 保證單行（Terminal 也適用），Desktop 再加 B 縮小字級，讓截斷更少發生、每列更矮。C 的細進度條等實機驗證 Svg 可行後再考慮。',
+    view: () => band({ short: true, oneLine: true, mark: true, small: true }),
+    rows: '約 6 列，每列較矮', term: '有效（A 的部分）', risk: '低～中',
+    pros: ['兩個平台都不換行', 'Desktop 上截掉的字更少'],
+    cons: ['改兩處規則，測試多一組', '小字的可讀性要實機確認'],
+  },
+]
+
+document.getElementById('options').innerHTML = OPTIONS.map(o => `
+  <section class="option" id="opt-${o.id}">
+    <div class="opt-head"><span class="opt-id">${o.id}</span><h2>${o.title}</h2>${o.rec ? '<span class="rec">建議</span>' : ''}${o.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+    <p class="opt-desc">${o.desc}</p>
+    <div class="pair">
+      <div class="win"><div class="win-label"><span><b>現況</b>：460px 窄視窗</span><span>約 9 列</span></div>${chat}<div class="cut">${NOW()}</div></div>
+      <div class="win"><div class="win-label"><span><b>改後</b>：同一個窄視窗</span><span>${o.rows}</span></div>${chat}${o.view()}</div>
+    </div>
+    <div class="meta">
+      <div><h3>優點</h3><ul>${o.pros.map(x => `<li>${x}</li>`).join('')}</ul></div>
+      <div><h3>缺點</h3><ul>${o.cons.map(x => `<li>${x}</li>`).join('')}</ul></div>
+    </div>
+    <div class="score"><span>窄視窗高度：<b>${o.rows}</b></span><span>Terminal：<b>${o.term}</b></span><span>風險：<b>${o.risk}</b></span></div>
+  </section>`).join('')
+
+document.getElementById('sum-body').innerHTML = OPTIONS.map(o => `
+  <tr><td><b>${o.id}</b> ${o.title}${o.rec ? '（建議）' : ''}</td><td>${o.desc.split('。')[0]}</td><td>${o.rows}</td><td>${o.term}</td><td>${o.risk}</td></tr>`).join('')
+
+const buttons = document.querySelectorAll('[data-theme-set]')
+const setTheme = t => {
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme')
+  else document.documentElement.setAttribute('data-theme', t)
+  buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themeSet === t)))
+  try { localStorage.setItem('narrow-options-theme', t) } catch {}
+}
+buttons.forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themeSet)))
+try { const saved = localStorage.getItem('narrow-options-theme'); if (saved) setTheme(saved) } catch {}
+</script>
+</body>
+</html>
