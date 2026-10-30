@@ -6,6 +6,8 @@ import { applyLegacyPlan, migrateSteps } from './progress/legacy'
 import { TICKET_AUTHOR } from './progress/manifests'
 import { type Action, FADE_MS, STALE_MS, emptyState, nextDue, reduce, stageCeiling } from './progress/reducer'
 import { PRIMARY_HOLD_MS, primaryRun, runView, shownRun } from './progress/view'
+import { textCells } from './layout'
+import { displayWidth } from './text'
 
 // ---- helpers -----------------------------------------------------------------
 
@@ -766,4 +768,108 @@ test('when runs end together, the shown one stays until it fades; a failed one s
   let f = fold(emptyState(), x('run.started'), y('run.started', {}, T0 + 1))
   f = fold(f, y('run.failed', { message: 'boom' }, T0 + 2))
   expect(shownRun(f)?.runId).toBe('y')
+})
+
+// ---- one line per row; the narrow band -----------------------------------------
+
+const USAGE_FULL = {
+  startedAt: 0,
+  rateLimits: [],
+  context: {
+    tokens: 582000,
+    window: 1000000,
+    percent: 58,
+    breakdown: {
+      categories: [
+        { name: 'System tools', tokens: 32000, color: 'inactive', kind: 'used', isDeferred: false },
+        { name: 'Messages', tokens: 550000, color: 'permission', kind: 'used', isDeferred: false },
+        { name: 'Free space', tokens: 418000, color: 'inactive', kind: 'free', isDeferred: false },
+      ],
+      totalTokens: 582000,
+      maxTokens: 1000000,
+      rawMaxTokens: 1000000,
+      percentage: 58,
+      autoCompactThreshold: 967000,
+      isAutoCompactEnabled: true,
+    },
+  },
+} as never
+
+const LONG = 'ADV-CONSTRSRC-01 BLOCKED 回流（無模型啟動）'
+
+// A measured band with one long-titled run, mounted at `cols` on `surface`.
+const runBand = async ($: any, on: any, cols: number, surface: 'desktop' | 'terminal') => {
+  await startRun($, on)
+  return mountAt($, cols, surface)
+}
+const mountAt = ($: any, cols: number, surface: 'desktop' | 'terminal') =>
+  $.ui.mount({ plugin: 'context-bar', surface, component: 'AbovePrompt', props: bandOf(cols) })
+const startRun = async ($: any, on: any) => {
+  mock.clock(on, { now: T0 })
+  on('ui.render', engineBand)
+  on('session.usage', () => ({ value: USAGE_FULL }) as never)
+  on('session.measure', () => ({ changed: ['context'] }) as never)
+  await $.session.measure({ context: { window: 1000000 }, rateLimits: [], changed: ['context'] } as never)
+  await emit($, { type: 'run.started', workflowId: 'ticket-author', label: LONG })
+}
+
+const svgs = async (ui: any) => ((await ui.findAll({ type: 'Svg' })) as any[]).map(n => n.props)
+
+test('narrow desktop: small text, two thin bars, no cat, status row, divider, token count or details', async ($, on) => {
+  const ui = await runBand($, on, 50, 'desktop')
+  const all = await svgs(ui)
+  expect(all.some(p => String(p.alt).startsWith('cat'))).toBe(false)
+  const thin = all.filter(p => p.height === 8)
+  expect(thin.length).toBe(2)
+  for (const p of thin) {
+    expect(p.width).toBeUndefined()
+    expect(String(p.source)).toContain('width="4000"')
+  }
+  expect(await ui.find({ key: 'progress-steps-live' })).toBeUndefined()
+  expect(await ui.find({ key: 'progress-divider' })).toBeUndefined()
+  expect(await ui.find({ key: 'details-toggle' })).toBeUndefined()
+  expect(await ui.find({ key: 'bar' })).toBeUndefined()
+  const header = (await ui.find({ key: 'header' })) as any
+  expect(header.text).toContain('58%')
+  expect(header.text).not.toContain('582k')
+  const head = (await ui.find({ key: 'progress-steps-head' })) as any
+  expect(head.text).toContain('0/7')
+  expect(JSON.stringify(head)).toContain('"size":"footnote"')
+  await ui.unmount()
+})
+
+test('narrow terminal: one-row blocks for both bars, no Svg, no cat', async ($, on) => {
+  const ui = await runBand($, on, 50, 'terminal')
+  expect((await svgs(ui)).length).toBe(0)
+  expect(((await ui.find({ key: 'progress-steps-track' })) as any).props.height).toBe(1)
+  expect(((await ui.find({ key: 'bar' })) as any).props.height).toBe(1)
+  expect((await ui.find({ key: 'progress-steps-track' }))?.text ?? '').not.toMatch(/[ᓚᘏᗢ=^]/)
+  expect(await ui.find({ key: 'progress-steps-live' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('wide desktop keeps the P2 band: cat, status row, divider, details, full token summary', async ($, on) => {
+  const ui = await runBand($, on, 100, 'desktop')
+  expect((await svgs(ui)).some(p => String(p.alt).startsWith('cat'))).toBe(true)
+  expect(await ui.find({ key: 'progress-steps-live' })).toBeDefined()
+  expect(await ui.find({ key: 'progress-divider' })).toBeDefined()
+  expect(await ui.find({ key: 'details-toggle' })).toBeDefined()
+  expect(await ui.find({ key: 'bar' })).toBeDefined()
+  expect((await ui.find({ key: 'header' }))?.text).toContain('582k of 1M · compacts at 967k')
+  await ui.unmount()
+})
+
+test('every row is cut to one line before it is drawn, wide or narrow', async ($, on) => {
+  await startRun($, on)
+  for (const cols of [40, 59, 60, 80]) {
+    const ui = await mountAt($, cols, 'desktop')
+    const cells = textCells(cols, 'desktop')
+    const head = ((await ui.find({ key: 'progress-steps-head' })) as any).text as string
+    const header = ((await ui.find({ key: 'header' })) as any).text as string
+    expect(displayWidth(head)).toBeLessThanOrEqual(cells)
+    expect(displayWidth(header)).toBeLessThanOrEqual(cells)
+    expect(head).toContain('0/7')
+    expect(header).toContain('58%')
+    await ui.unmount()
+  }
 })
