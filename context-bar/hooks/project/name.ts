@@ -3,12 +3,15 @@
 // project's.
 
 import type { ProjectNames } from '../../types'
+import { NARROW_COLUMNS } from '../layout'
+import { clipWidth, displayWidth } from '../text'
+
+export { clipWidth, displayWidth }
 
 export const NAME_MAX = 8
 // The first word an abbreviation keeps, in cells.
 const HEAD_MAX = 6
-// Narrow bands keep a shorter label.
-const NARROW_COLUMNS = 60
+// A narrow band (under NARROW_COLUMNS) keeps a shorter label.
 const NARROW_MAX = 6
 
 export const emptyNames = (): ProjectNames => ({ auto: {}, custom: {}, off: [] })
@@ -23,23 +26,6 @@ export const projectKey = (path: string): string | null => {
 export const folderName = (path: string): string => {
   const p = path.trim().replace(/\\/g, '/').replace(/\/+$/, '')
   return p.slice(p.lastIndexOf('/') + 1)
-}
-
-// East Asian wide characters take two cells.
-const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/
-const cells = (ch: string) => (WIDE.test(ch) ? 2 : 1)
-export const displayWidth = (s: string): number => [...s].reduce((n, ch) => n + cells(ch), 0)
-
-// The longest start of `s` that fits in `width` cells.
-export const clipWidth = (s: string, width: number): string => {
-  let out = ''
-  let n = 0
-  for (const ch of s) {
-    if (n + cells(ch) > width) break
-    out += ch
-    n += cells(ch)
-  }
-  return out
 }
 
 // `SmartCameraApp1` → Smart Camera App 1; `mcp-ticket-platform` → mcp ticket platform;
