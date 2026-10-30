@@ -20,6 +20,9 @@ import { applyLegacyPlan, currentPlan, hasOpenEmitRun, migrateSteps } from './pr
 import { type Action, emptyState, isTerminal, nextDue, reduce } from './progress/reducer'
 import { backgroundCount, diagnosticsText, runView, shownRun } from './progress/view'
 import { cleanName, folderName, labelFor, projectKey, readNames, resolveName } from './project/name'
+import { fitHeader, fitText, isNarrow, textCells } from './layout'
+import { displayWidth } from './text'
+import { THIN_BARS, THIN_BAR_PX, isLightTheme, thinBarSvg } from './thinbar'
 
 const snapshot = atom({ plugin: 'context-bar', key: 'snapshot' } as const, null)
 // Why the last refresh produced no full breakdown; shown while there is no snapshot.
@@ -194,6 +197,30 @@ const registerProgressTool = async ($: EngineInterface) => {
   } catch {
     // No command: the band still draws.
   }
+}
+
+// Whether the person's theme is a light one: the thin bars' Svg needs raw colours.
+let isLight = false
+
+const loadTheme = async ($: EngineInterface) => {
+  try {
+    const row = (await $.config.list()).find(r => r.key === 'theme')
+    isLight = isLightTheme(typeof row?.value === 'string' ? row.value : null)
+  } catch {
+    // No settings to read: the dark colours.
+  }
+}
+
+// The context bar as a thin bar: used rows in order, free space, the compaction tick.
+const contextThinSvg = (s: Snapshot) => {
+  const max = s.maxTokens > 0 ? s.maxTokens : 1
+  const used = s.categories.filter(c => c.kind === 'used' && c.tokens > 0)
+  const free = Math.max(0, max - used.reduce((n, c) => n + c.tokens, 0))
+  return thinBarSvg(
+    [...used.map(c => ({ weight: c.tokens, color: c.color })), { weight: free, color: FREE_BG }],
+    isLight,
+    s.threshold !== null && s.threshold > 0 ? { at: Math.min(1, s.threshold / max), color: TICK_COLOR } : undefined,
+  )
 }
 
 // Names by project key, kept between sessions (see ProjectNames).
@@ -452,6 +479,7 @@ export const register: Register = on => {
     await registerProgressTool($)
     await loadPrefs($)
     await loadProject($, e.cwd)
+    await loadTheme($)
     // A reload keeps the runs but loses the calls that were in flight.
     await act($, { kind: 'reload', at: await now($) })
     await refresh($)
@@ -623,12 +651,22 @@ export const register: Register = on => {
     const mascotSvg = e.surface === 'terminal' ? undefined : Svg
     lastSurface = e.surface
 
+    // Narrow (under NARROW_COLUMNS): small text, thin bars, no cat, status row,
+    // divider, token count or details. Wide or narrow, every row is one line.
+    const narrow = isNarrow(e.props.bodyColumns)
+    const cells = textCells(e.props.bodyColumns, e.surface)
+    const small = narrow ? { size: 'footnote' } : {}
+    const thinSvg = narrow && THIN_BARS ? mascotSvg : undefined
+
     const state = await read($, progress)
     const run = shownRun(state)
     const view = run !== null ? runView(run, await now($)) : null
     const blocks = progressRows(view, { Box, Text, Svg: mascotSvg } as never, {
       background: backgroundCount(state, run),
       columns: e.props.bodyColumns,
+      cells,
+      narrow,
+      light: isLight,
     })
     // Progress sits above the context bar, a low-contrast text rule between them,
     // cut to one line. The terminal's spans the row, one ─ per cell; the
@@ -641,33 +679,41 @@ export const register: Register = on => {
       blocks.length > 0 ? (
         <Box key="progress" flexDirection="column">
           {blocks}
-          <Box key="progress-divider" height={1} flexDirection="row" justifyContent={isTerminal ? 'flex-start' : 'center'}>
-            <Text wrap="truncate-end" color="inactive" dimColor>
-              {'─'.repeat(ruleWidth)}
-            </Text>
-          </Box>
+          {narrow ? null : (
+            <Box key="progress-divider" height={1} flexDirection="row" justifyContent={isTerminal ? 'flex-start' : 'center'}>
+              <Text wrap="truncate-end" color="inactive" dimColor>
+                {'─'.repeat(ruleWidth)}
+              </Text>
+            </Box>
+          )}
         </Box>
       ) : null
 
     // ◆ [name] context: the project label sits between the mark and the title,
     // each its own Text in a row so the label keeps its block colours.
     const p = await read($, project)
+    const labelText = p !== null && p.label !== null ? `[${labelFor(p.label, e.props.bodyColumns)}]` : null
     const label =
-      p !== null && p.label !== null ? (
-        <Text key="project-label" bold color={LABEL_FG} backgroundColor={LABEL_BG}>
-          {`[${labelFor(p.label, e.props.bodyColumns)}]`}
+      labelText !== null ? (
+        <Text key="project-label" bold color={LABEL_FG} backgroundColor={LABEL_BG} {...small}>
+          {labelText}
         </Text>
       ) : null
     const title = (tail: string) => [
-      <Text key="mark" color="claude">
+      <Text key="mark" color="claude" {...small}>
         ◆{' '}
       </Text>,
       label,
-      label !== null ? <Text key="label-gap"> </Text> : null,
-      <Text key="name" bold>
+      label !== null ? (
+        <Text key="label-gap" {...small}>
+          {' '}
+        </Text>
+      ) : null,
+      <Text key="name" bold {...small}>
         {tail}
       </Text>,
     ]
+    const titleText = `◆ ${labelText !== null ? `${labelText} ` : ''}context`
 
     if (s === null) {
       const why = await read($, diag)
@@ -676,18 +722,25 @@ export const register: Register = on => {
           {progressBox}
           <Box key="waiting" flexDirection="row">
             {title('context ')}
-            <Text dimColor wrap="truncate-end">
-              {why ?? 'waiting for first measurement…'}
+            <Text dimColor wrap="truncate-end" {...small}>
+              {fitText(why ?? 'waiting for first measurement…', cells - displayWidth(titleText) - 1)}
             </Text>
           </Box>
         </Box>
       )
     }
     const pct = Math.round(s.percentage)
-    const open = await read($, detailsOpen)
-    const summary =
-      `${formatTokens(s.totalTokens)} of ${formatTokens(s.maxTokens)}` +
-      (s.threshold !== null ? ` · compacts at ${formatTokens(s.threshold)}` : '')
+    // Narrow shows no legend, whatever the saved choice.
+    const open = (await read($, detailsOpen)) && !narrow
+    const fit = fitHeader(
+      titleText,
+      formatTokens(s.totalTokens),
+      formatTokens(s.maxTokens),
+      s.threshold !== null ? formatTokens(s.threshold) : null,
+      pct,
+      cells,
+      narrow,
+    )
 
     const header = (
       <Box key="header" flexDirection="row" justifyContent="space-between">
@@ -695,16 +748,18 @@ export const register: Register = on => {
           <Box key="title-text" flexDirection="row">
             {title('context')}
           </Box>
-          <Button
-            key="details-toggle"
-            label={open ? '▾ details' : '▸ details'}
-            plain
-            dimColor
-            onPress={() => toggleDetails($)}
-          />
+          {fit.details ? (
+            <Button
+              key="details-toggle"
+              label={open ? '▾ details' : '▸ details'}
+              plain
+              dimColor
+              onPress={() => toggleDetails($)}
+            />
+          ) : null}
         </Box>
-        <Text>
-          <Text dimColor>{summary} </Text>
+        <Text {...small}>
+          {fit.summary !== '' ? <Text dimColor>{fit.summary} </Text> : null}
           <Text bold color="inverseText" backgroundColor={badgeColor(pct)}>
             {` ${pct}% `}
           </Text>
@@ -728,17 +783,20 @@ export const register: Register = on => {
       <Box key="context-bar" flexDirection="column" borderStyle="round" borderColor={FREE_COLOR} paddingX={1}>
         {progressBox}
         {header}
-        {/* Proportional colour blocks, not glyphs: a desktop font draws █ wider than a cell, so a glyph bar wraps. */}
-        <Box key="bar" flexDirection="row" width="100%" height={1}>
-          {runs(barCells(s, width)).map(r => (
-            <Box
-              width={0}
-              flexGrow={r.text.length}
-              height={1}
-              backgroundColor={r.dim ? FREE_BG : r.color}
-            />
-          ))}
-        </Box>
+        {/* Proportional colour blocks, not glyphs: a desktop font draws █ wider than a cell, so a glyph bar wraps.
+            A narrow desktop band draws the bar thin instead (thinbar.ts). */}
+        {thinSvg !== undefined ? (
+          (() => {
+            const Thin = thinSvg as unknown as typeof Box
+            return <Thin key="bar-thin" source={contextThinSvg(s)} alt={`context ${pct}% used`} height={THIN_BAR_PX} />
+          })()
+        ) : (
+          <Box key="bar" flexDirection="row" width="100%" height={1}>
+            {runs(barCells(s, width)).map(r => (
+              <Box width={0} flexGrow={r.text.length} height={1} backgroundColor={r.dim ? FREE_BG : r.color} />
+            ))}
+          </Box>
+        )}
         {open ? (
           <Box key="legend" flexDirection="row" flexWrap="wrap" columnGap={2}>
             {legendRows.map(c => (
